@@ -283,7 +283,7 @@ client.on('messageCreate', async (message) => {
                 console.log('Status command executed successfully'); // Debug log
                 break;
                 
-            case 'users':
+case 'users':
     try {
         const usersEmbed = new EmbedBuilder()
             .setColor('#00ff00')
