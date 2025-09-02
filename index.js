@@ -368,4 +368,3 @@ if (!CONFIG.DISCORD_CHANNEL_ID) {
 }
 
 client.login(CONFIG.DISCORD_TOKEN);
-client.login(CONFIG.DISCORD_TOKEN);
