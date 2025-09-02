@@ -1,37 +1,37 @@
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const axios = require('axios');
-require('dotenv').config();
 
 // Configuration
 const CONFIG = {
     DISCORD_TOKEN: process.env.DISCORD_TOKEN,
     DISCORD_CHANNEL_ID: process.env.DISCORD_CHANNEL_ID,
-    ROBLOX_GAME_ID: process.env.ROBLOX_GAME_ID || '5375160701',
-    CHECK_INTERVAL: process.env.CHECK_INTERVAL || 30, // seconds
-
+    
     // List of specific usernames to monitor
     MONITORED_USERS: process.env.MONITORED_USERS ? 
         process.env.MONITORED_USERS.split(',').map(u => u.trim()) : 
         ['Username1', 'Username2'],
-
+    
     // Group ID to monitor (replace with your group ID)
     GROUP_ID: process.env.GROUP_ID || '4594985',
-
+    
     // Ranks to monitor (replace with actual rank numbers)
     MONITORED_RANKS: process.env.MONITORED_RANKS ? 
         process.env.MONITORED_RANKS.split(',').map(r => parseInt(r.trim())) : 
         [1, 2, 3], // Owner, Admin, Moderator
-
+    
     // Notification settings
     NOTIFY_SPECIFIC_USERS: true,
     NOTIFY_GROUP_MEMBERS: true,
     NOTIFY_GROUP_RANKS: true,
-
+    
     // NEW: Show rank info for ALL players in your group
     SHOW_GROUP_RANKS: true,
-
+    
     // NEW: Ping everyone when someone joins
-    PING_EVERYONE: true
+    PING_EVERYONE: true,
+    
+    // NEW: Check interval for user status
+    CHECK_INTERVAL: process.env.CHECK_INTERVAL || 30 // seconds
 };
 
 // Create Discord client
@@ -43,39 +43,35 @@ const client = new Client({
     ]
 });
 
-// Store current players
-let currentPlayers = new Set();
+// Store user statuses
+let userStatuses = new Map(); // username -> { isOnline: boolean, lastSeen: Date, currentGame: string }
 let isMonitoring = false;
 
 // Roblox API functions
-async function getGamePlayers(gameId) {
+async function getUserStatus(username) {
     try {
-        // Try multiple API endpoints
-        const endpoints = [
-            `https://games.roblox.com/v1/games/${gameId}/servers/0/players`,
-            `https://games.roblox.com/v1/games/${gameId}/servers`,
-            `https://games.roblox.com/v1/games/${gameId}/status`
-        ];
+        // Get user ID first
+        const userResponse = await axios.get(`https://api.roblox.com/users/get-by-username?username=${username}`);
+        const userId = userResponse.data.Id;
         
-        for (const endpoint of endpoints) {
-            try {
-                const response = await axios.get(endpoint);
-                if (response.data && response.data.data) {
-                    return response.data.data;
-                }
-            } catch (e) {
-                console.log(`Trying endpoint: ${endpoint} - Failed`);
-                continue;
-            }
+        // Get user's current status
+        const statusResponse = await axios.get(`https://presence.roblox.com/v1/presence/users`, {
+            data: { userIds: [userId] }
+        });
+        
+        if (statusResponse.data.userPresences && statusResponse.data.userPresences[0]) {
+            const presence = statusResponse.data.userPresences[0];
+            return {
+                isOnline: presence.userPresenceType === 2, // 2 = Online
+                currentGame: presence.placeId ? presence.placeId.toString() : null,
+                lastSeen: new Date(presence.lastOnline)
+            };
         }
         
-        // If all endpoints fail, try a different approach
-        console.log('All standard endpoints failed, trying alternative method...');
-        return [];
-        
+        return { isOnline: false, currentGame: null, lastSeen: new Date() };
     } catch (error) {
-        console.error('Error fetching game players:', error.message);
-        return [];
+        console.error(`Error fetching status for ${username}:`, error.message);
+        return { isOnline: false, currentGame: null, lastSeen: new Date() };
     }
 }
 
@@ -84,11 +80,11 @@ async function getUserGroupInfo(username, groupId) {
         // First get user ID
         const userResponse = await axios.get(`https://api.roblox.com/users/get-by-username?username=${username}`);
         const userId = userResponse.data.Id;
-
+        
         // Then get group info
         const groupResponse = await axios.get(`https://groups.roblox.com/v1/users/${userId}/groups`);
         const userGroups = groupResponse.data.data;
-
+        
         const targetGroup = userGroups.find(group => group.group.id === parseInt(groupId));
         return targetGroup ? { isInGroup: true, rank: targetGroup.role.rank, roleName: targetGroup.role.name } : { isInGroup: false, rank: 0, roleName: '' };
     } catch (error) {
@@ -98,45 +94,48 @@ async function getUserGroupInfo(username, groupId) {
 }
 
 // Create notification embed
-function createNotificationEmbed(username, type, rank = null, roleName = null, groupName = null) {
+function createNotificationEmbed(username, type, rank = null, roleName = null, gameName = null) {
     const embed = new EmbedBuilder();
-
-    if (type === 'specific_user') {
-        embed.setColor('#FF0000')
-            .setTitle('🚨 Specific User Alert!')
-            .setDescription(`${username} has joined the game!`)
-            .setTimestamp();
-    } else if (type === 'group_member') {
+    
+    if (type === 'user_online') {
         embed.setColor('#00FF00')
-            .setTitle('👥 Group Member Joined!')
-            .setDescription(`${username} (Rank: ${rank}) has joined the game!`)
+            .setTitle('🟢 User Online!')
+            .setDescription(`${username} is now online on Roblox!`)
             .setTimestamp();
-    } else if (type === 'high_rank') {
+        
+        if (gameName) {
+            embed.addFields({ name: 'Current Game', value: gameName, inline: true });
+        }
+    } else if (type === 'user_offline') {
+        embed.setColor('#FF0000')
+            .setTitle('🔴 User Offline!')
+            .setDescription(`${username} is now offline on Roblox!`)
+            .setTimestamp();
+    } else if (type === 'group_member_online') {
+        embed.setColor('#00FF00')
+            .setTitle('👥 Group Member Online!')
+            .setDescription(`${username} (Rank: ${rank}) is now online!`)
+            .setTimestamp();
+        
+        if (gameName) {
+            embed.addFields({ name: 'Current Game', value: gameName, inline: true });
+        }
+    } else if (type === 'high_rank_online') {
         embed.setColor('#FFD700')
-            .setTitle('⭐ High Rank Alert!')
-            .setDescription(`${username} (Rank ${rank}) has joined the game!`)
+            .setTitle('⭐ High Rank Online!')
+            .setDescription(`${username} (Rank ${rank}) is now online!`)
             .setTimestamp();
-    } else if (type === 'left') {
-        embed.setColor('#FFA500')
-            .setTitle('👋 Monitored Player Left!')
-            .setDescription(`${username} has left the game!`)
-            .setTimestamp();
-    } else if (type === 'group_rank_info') {
-        embed.setColor('#0099ff')
-            .setTitle('ℹ️ Group Member Info')
-            .setDescription(`${username} joined the game!`)
-            .addFields(
-                { name: 'Group Rank', value: `${rank}`, inline: true },
-                { name: 'Role Name', value: roleName || 'Unknown', inline: true }
-            )
-            .setTimestamp();
+        
+        if (gameName) {
+            embed.addFields({ name: 'Current Game', value: gameName, inline: true });
+        }
     }
-
-    if (groupName) {
-        embed.addFields({ name: 'Group', value: groupName, inline: true });
+    
+    if (roleName) {
+        embed.addFields({ name: 'Role', value: roleName, inline: true });
     }
-
-    embed.setFooter({ text: 'Roblox Player Monitor' });
+    
+    embed.setFooter({ text: 'Roblox User Monitor' });
     return embed;
 }
 
@@ -144,13 +143,13 @@ function createNotificationEmbed(username, type, rank = null, roleName = null, g
 async function sendDiscordNotification(embed, pingEveryone = false) {
     try {
         const channel = await client.channels.fetch(CONFIG.DISCORD_CHANNEL_ID);
-
+        
         // Create the message content
         let messageContent = '';
         if (pingEveryone && CONFIG.PING_EVERYONE) {
             messageContent = '@everyone'; // This pings everyone in the server
         }
-
+        
         await channel.send({ 
             content: messageContent,
             embeds: [embed] 
@@ -162,152 +161,116 @@ async function sendDiscordNotification(embed, pingEveryone = false) {
 }
 
 // Main monitoring function
-async function checkGamePlayers() {
+async function checkUserStatuses() {
     if (!isMonitoring) return;
-
+    
     try {
-        const players = await getGamePlayers(CONFIG.ROBLOX_GAME_ID);
-        const newPlayers = new Set(players.map(p => p.name));
-
-        // Check for new players
-        for (const player of newPlayers) {
-            if (!currentPlayers.has(player)) {
-                await handlePlayerJoin(player);
+        console.log('Checking user statuses...');
+        
+        // Check monitored users
+        for (const username of CONFIG.MONITORED_USERS) {
+            const currentStatus = await getUserStatus(username);
+            const previousStatus = userStatuses.get(username);
+            
+            // User came online
+            if (currentStatus.isOnline && (!previousStatus || !previousStatus.isOnline)) {
+                console.log(`🔔 ${username} came online!`);
+                
+                const embed = createNotificationEmbed(username, 'user_online', null, null, currentStatus.currentGame);
+                await sendDiscordNotification(embed, true);
+            }
+            
+            // User went offline
+            if (!currentStatus.isOnline && previousStatus && previousStatus.isOnline) {
+                console.log(`🔔 ${username} went offline!`);
+                
+                const embed = createNotificationEmbed(username, 'user_offline');
+                await sendDiscordNotification(embed, false);
+            }
+            
+            // Update status
+            userStatuses.set(username, currentStatus);
+        }
+        
+        // Check group members
+        for (const username of CONFIG.MONITORED_USERS) {
+            const groupInfo = await getUserGroupInfo(username, CONFIG.GROUP_ID);
+            if (groupInfo.isInGroup) {
+                const currentStatus = userStatuses.get(username);
+                
+                if (currentStatus && currentStatus.isOnline) {
+                    // Group member is online
+                    if (CONFIG.NOTIFY_GROUP_RANKS && CONFIG.MONITORED_RANKS.includes(groupInfo.rank)) {
+                        // High rank member
+                        const embed = createNotificationEmbed(username, 'high_rank_online', groupInfo.rank, groupInfo.roleName, currentStatus.currentGame);
+                        await sendDiscordNotification(embed, true);
+                    } else {
+                        // Regular group member
+                        const embed = createNotificationEmbed(username, 'group_member_online', groupInfo.rank, groupInfo.roleName, currentStatus.currentGame);
+                        await sendDiscordNotification(embed, true);
+                    }
+                }
             }
         }
-
-        // Check for players who left
-        for (const player of currentPlayers) {
-            if (!newPlayers.has(player)) {
-                await handlePlayerLeave(player);
-            }
-        }
-
-        currentPlayers = newPlayers;
-
+        
         // Update bot status
-        client.user.setActivity(`Monitoring ${currentPlayers.size} players`, { type: 3 });
-
+        const onlineUsers = Array.from(userStatuses.values()).filter(status => status.isOnline).length;
+        client.user.setActivity(`Monitoring ${onlineUsers} users online`, { type: 3 });
+        
     } catch (error) {
-        console.error('Error checking game players:', error.message);
-    }
-}
-
-async function handlePlayerJoin(username) {
-    let shouldNotify = false;
-    let notificationType = '';
-    let rank = null;
-    let roleName = null;
-
-    // Check specific usernames
-    if (CONFIG.NOTIFY_SPECIFIC_USERS && CONFIG.MONITORED_USERS.includes(username)) {
-        shouldNotify = true;
-        notificationType = 'specific_user';
-    }
-
-    // Check group memberships
-    if (CONFIG.NOTIFY_GROUP_MEMBERS || CONFIG.NOTIFY_GROUP_RANKS) {
-        const groupInfo = await getUserGroupInfo(username, CONFIG.GROUP_ID);
-        if (groupInfo.isInGroup) {
-            shouldNotify = true;
-            rank = groupInfo.rank;
-            roleName = groupInfo.roleName;
-
-            if (CONFIG.NOTIFY_GROUP_RANKS && CONFIG.MONITORED_RANKS.includes(groupInfo.rank)) {
-                notificationType = 'high_rank';
-            } else {
-                notificationType = 'group_member';
-            }
-        }
-    }
-
-    // NEW: Always show rank info for group members (even if not monitored)
-    if (CONFIG.SHOW_GROUP_RANKS) {
-        const groupInfo = await getUserGroupInfo(username, CONFIG.GROUP_ID);
-        if (groupInfo.isInGroup) {
-            const rankEmbed = createNotificationEmbed(username, 'group_rank_info', groupInfo.rank, groupInfo.roleName);
-            await sendDiscordNotification(rankEmbed, true); // Ping everyone for group members
-        }
-    }
-
-    if (shouldNotify) {
-        const embed = createNotificationEmbed(username, notificationType, rank, roleName);
-        await sendDiscordNotification(embed, true); // Ping everyone for monitored users
-
-        console.log(`🔔 NOTIFICATION: ${username} joined the game!`);
-    }
-}
-
-async function handlePlayerLeave(username) {
-    let shouldNotify = false;
-
-    // Check if leaving player was monitored
-    if (CONFIG.MONITORED_USERS.includes(username)) {
-        shouldNotify = true;
-    } else {
-        const groupInfo = await getUserGroupInfo(username, CONFIG.GROUP_ID);
-        if (groupInfo.isInGroup) {
-            shouldNotify = true;
-        }
-    }
-
-    if (shouldNotify) {
-        const embed = createNotificationEmbed(username, 'left');
-        await sendDiscordNotification(embed, false); // Don't ping everyone when someone leaves
-
-        console.log(`🔔 NOTIFICATION: ${username} left the game!`);
+        console.error('Error checking user statuses:', error.message);
     }
 }
 
 // Discord bot events
 client.once('ready', () => {
     console.log(`�� Discord bot logged in as ${client.user.tag}`);
-    console.log(`�� Monitoring game ID: ${CONFIG.ROBLOX_GAME_ID}`);
     console.log(`👥 Monitored users: ${CONFIG.MONITORED_USERS.join(', ')}`);
     console.log(`🏢 Monitoring group ID: ${CONFIG.GROUP_ID}`);
     console.log(`⭐ Monitored ranks: ${CONFIG.MONITORED_RANKS.join(', ')}`);
     console.log(`ℹ️ Showing rank info for all group members: ${CONFIG.SHOW_GROUP_RANKS}`);
     console.log(`🔔 Pinging everyone on join: ${CONFIG.PING_EVERYONE}`);
-
+    
     // Set bot status
     client.user.setActivity('Setting up monitoring...', { type: 3 });
-
+    
     // Start monitoring
     isMonitoring = true;
-    checkGamePlayers();
-
+    checkUserStatuses();
+    
     // Schedule regular checks
-    setInterval(checkGamePlayers, CONFIG.CHECK_INTERVAL * 1000);
-
+    setInterval(checkUserStatuses, CONFIG.CHECK_INTERVAL * 1000);
+    
     console.log('✅ Monitoring started successfully!');
 });
 
-// Bot commands - FIXED VERSION
+// Bot commands
 client.on('messageCreate', async (message) => {
     // Ignore bot messages
     if (message.author.bot) return;
-
+    
     // Check if message starts with our prefix
     const prefix = '!';
     if (!message.content.startsWith(prefix)) return;
-
+    
     console.log(`Command received: ${message.content}`); // Debug log
-
+    
     const args = message.content.slice(prefix.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
-
+    
     console.log(`Command: ${command}, Args: ${args}`); // Debug log
-
+    
     try {
         switch (command) {
             case 'status':
+                const onlineUsers = Array.from(userStatuses.values()).filter(status => status.isOnline);
                 const statusEmbed = new EmbedBuilder()
                     .setColor('#0099ff')
                     .setTitle('📊 Monitor Status')
                     .addFields(
-                        { name: 'Game ID', value: CONFIG.ROBLOX_GAME_ID, inline: true },
-                        { name: 'Current Players', value: currentPlayers.size.toString(), inline: true },
                         { name: 'Monitoring', value: isMonitoring ? '✅ Active' : '❌ Inactive', inline: true },
+                        { name: 'Online Users', value: onlineUsers.length.toString(), inline: true },
+                        { name: 'Total Monitored', value: CONFIG.MONITORED_USERS.length.toString(), inline: true },
                         { name: 'Monitored Users', value: CONFIG.MONITORED_USERS.join(', ') || 'None', inline: false },
                         { name: 'Group ID', value: CONFIG.GROUP_ID, inline: true },
                         { name: 'Check Interval', value: `${CONFIG.CHECK_INTERVAL}s`, inline: true },
@@ -315,34 +278,39 @@ client.on('messageCreate', async (message) => {
                         { name: 'Ping Everyone', value: CONFIG.PING_EVERYONE ? '✅ Yes' : '❌ No', inline: true }
                     )
                     .setTimestamp();
-
+                
                 await message.reply({ embeds: [statusEmbed] });
                 console.log('Status command executed successfully'); // Debug log
                 break;
-
-            case 'players':
-                const playersEmbed = new EmbedBuilder()
+                
+            case 'users':
+                const usersEmbed = new EmbedBuilder()
                     .setColor('#00ff00')
-                    .setTitle('�� Current Players')
-                    .setDescription(currentPlayers.size > 0 ? 
-                        currentPlayers.size + ' players online:\n' + Array.from(currentPlayers).join(', ') :
-                        'No players currently online')
-                    .setTimestamp();
-
-                await message.reply({ embeds: [playersEmbed] });
-                console.log('Players command executed successfully'); // Debug log
+                    .setTitle('👥 User Status')
+                    .setDescription('Current status of monitored users:');
+                
+                for (const username of CONFIG.MONITORED_USERS) {
+                    const status = userStatuses.get(username);
+                    const statusText = status && status.isOnline ? '🟢 Online' : '🔴 Offline';
+                    const gameText = status && status.currentGame ? ` (Game: ${status.currentGame})` : '';
+                    usersEmbed.addFields({ name: username, value: statusText + gameText, inline: true });
+                }
+                
+                usersEmbed.setTimestamp();
+                await message.reply({ embeds: [usersEmbed] });
+                console.log('Users command executed successfully'); // Debug log
                 break;
-
+                
             case 'start':
                 if (!isMonitoring) {
                     isMonitoring = true;
-                    checkGamePlayers();
+                    checkUserStatuses();
                     await message.reply('✅ Monitoring started!');
                 } else {
                     await message.reply('⚠️ Monitoring is already active!');
                 }
                 break;
-
+                
             case 'stop':
                 if (isMonitoring) {
                     isMonitoring = false;
@@ -351,7 +319,7 @@ client.on('messageCreate', async (message) => {
                     await message.reply('⚠️ Monitoring is already stopped!');
                 }
                 break;
-
+                
             case 'help':
                 const helpEmbed = new EmbedBuilder()
                     .setColor('#0099ff')
@@ -359,16 +327,16 @@ client.on('messageCreate', async (message) => {
                     .addFields(
                         { name: '!help', value: 'Show this help message', inline: false },
                         { name: '!status', value: 'Show current monitor status', inline: false },
-                        { name: '!players', value: 'Show current players online', inline: false },
+                        { name: '!users', value: 'Show current user statuses', inline: false },
                         { name: '!start', value: 'Start monitoring', inline: false },
                         { name: '!stop', value: 'Stop monitoring', inline: false }
                     )
                     .setTimestamp();
-
+                
                 await message.reply({ embeds: [helpEmbed] });
                 console.log('Help command executed successfully'); // Debug log
                 break;
-
+                
             default:
                 console.log(`Unknown command: ${command}`); // Debug log
                 break;
@@ -399,4 +367,5 @@ if (!CONFIG.DISCORD_CHANNEL_ID) {
     process.exit(1);
 }
 
+client.login(CONFIG.DISCORD_TOKEN);
 client.login(CONFIG.DISCORD_TOKEN);
