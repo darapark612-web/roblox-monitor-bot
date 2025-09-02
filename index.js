@@ -284,22 +284,27 @@ client.on('messageCreate', async (message) => {
                 break;
                 
             case 'users':
-                const usersEmbed = new EmbedBuilder()
-                    .setColor('#00ff00')
-                    .setTitle('👥 User Status')
-                    .setDescription('Current status of monitored users:');
-                
-                for (const username of CONFIG.MONITORED_USERS) {
-                    const status = userStatuses.get(username);
-                    const statusText = status && status.isOnline ? '🟢 Online' : '🔴 Offline';
-                    const gameText = status && status.currentGame ? ` (Game: ${status.currentGame})` : '';
-                    usersEmbed.addFields({ name: username, value: statusText + gameText, inline: true });
-                }
-                
-                usersEmbed.setTimestamp();
-                await message.reply({ embeds: [usersEmbed] });
-                console.log('Users command executed successfully'); // Debug log
-                break;
+    try {
+        const usersEmbed = new EmbedBuilder()
+            .setColor('#00ff00')
+            .setTitle('👥 User Status')
+            .setDescription('Current status of monitored users:');
+        
+        for (const username of CONFIG.MONITORED_USERS) {
+            const status = userStatuses.get(username);
+            const statusText = status && status.isOnline ? '🟢 Online' : '🔴 Offline';
+            const gameText = status && status.currentGame ? ` (Game: ${status.currentGame})` : '';
+            usersEmbed.addFields({ name: username, value: statusText + gameText, inline: true });
+        }
+        
+        usersEmbed.setTimestamp();
+        await message.reply({ embeds: [usersEmbed] });
+        console.log('Users command executed successfully');
+    } catch (error) {
+        console.error('Error in users command:', error);
+        await message.reply('❌ Error showing user statuses. Try again later.');
+    }
+    break;
                 
             case 'start':
                 if (!isMonitoring) {
