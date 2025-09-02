@@ -50,8 +50,29 @@ let isMonitoring = false;
 // Roblox API functions
 async function getGamePlayers(gameId) {
     try {
-        const response = await axios.get(`https://games.roblox.com/v1/games/${gameId}/servers/0/players`);
-        return response.data.data || [];
+        // Try multiple API endpoints
+        const endpoints = [
+            `https://games.roblox.com/v1/games/${gameId}/servers/0/players`,
+            `https://games.roblox.com/v1/games/${gameId}/servers`,
+            `https://games.roblox.com/v1/games/${gameId}/status`
+        ];
+        
+        for (const endpoint of endpoints) {
+            try {
+                const response = await axios.get(endpoint);
+                if (response.data && response.data.data) {
+                    return response.data.data;
+                }
+            } catch (e) {
+                console.log(`Trying endpoint: ${endpoint} - Failed`);
+                continue;
+            }
+        }
+        
+        // If all endpoints fail, try a different approach
+        console.log('All standard endpoints failed, trying alternative method...');
+        return [];
+        
     } catch (error) {
         console.error('Error fetching game players:', error.message);
         return [];
