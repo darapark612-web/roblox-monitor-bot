@@ -60,7 +60,7 @@ const placeIdToUniverseId = new Map();
 async function getUserId(username) {
     if (usernameToIdCache.has(username)) return usernameToIdCache.get(username);
     const res = await axios.post(
-        'https://users.roblox.com/v1/usernames/users',
+        'https://users.roproxy.com/v1/usernames/users',
         { usernames: [username], excludeBannedUsers: true },
         { headers: { 'Content-Type': 'application/json' } }
     );
@@ -104,7 +104,7 @@ async function getUserStatus(username) {
 async function getUserGroupInfo(username, groupId) {
     try {
         const userId = await getUserId(username);
-        const groupResponse = await axios.get(`https://groups.roblox.com/v1/users/${userId}/groups`);
+        const groupResponse = await axios.get(`https://groups.roproxy.com/v1/users/${userId}/groups`);
         const userGroups = (groupResponse.data && groupResponse.data.data) || [];
         const targetGroup = userGroups.find(group => group.group && group.group.id === parseInt(groupId));
         return targetGroup ? { isInGroup: true, rank: targetGroup.role.rank, roleName: targetGroup.role.name } : { isInGroup: false, rank: 0, roleName: '' };
@@ -323,4 +323,126 @@ client.on('messageCreate', async (message) => {
     
     // Check if message starts with our prefix
     const prefix = '!';
-    if (!message content starts with(prefix)) return;
+    if (!message.content.startsWith(prefix)) return;
+    
+    console.log(`Command received: ${message.content}`); // Debug log
+    
+    const args = message content.slice(prefix.length).trim().split(/ +/);
+    const command = args.shift().toLowerCase();
+    
+    console.log(`Command: ${command}, Args: ${args}`); // Debug log
+    
+    try {
+        switch (command) {
+            case 'status':
+                const onlineUsers = Array.from(userStatuses.values()).filter(status => status.isOnline);
+                const statusEmbed = new EmbedBuilder()
+                    .setColor('#0099ff')
+                    .setTitle('📊 Monitor Status')
+                    .addFields(
+                        { name: 'Monitoring', value: isMonitoring ? '✅ Active' : '❌ Inactive', inline: true },
+                        { name: 'Online Users', value: onlineUsers.length.toString(), inline: true },
+                        { name: 'Total Monitored', value: CONFIG.MONITORED_USERS.length.toString(), inline: true },
+                        { name: 'Monitored Users', value: CONFIG.MONITORED_USERS.join(', ') || 'None', inline: false },
+                        { name: 'Group ID', value: CONFIG.GROUP_ID, inline: true },
+                        { name: 'Check Interval', value: `${CONFIG.CHECK_INTERVAL}s`, inline: true },
+                        { name: 'Show Group Ranks', value: CONFIG.SHOW_GROUP_RANKS ? '✅ Yes' : '❌ No', inline: true },
+                        { name: 'Ping Everyone', value: CONFIG.PING_EVERYONE ? '✅ Yes' : '❌ No', inline: true },
+                        { name: 'Notify On Offline', value: CONFIG.NOTIFY_ON_OFFLINE ? '✅ Yes' : '❌ No', inline: true }
+                    )
+                    .setTimestamp();
+                
+                await message.reply({ embeds: [statusEmbed] });
+                console.log('Status command executed successfully'); // Debug log
+                break;
+                
+case 'users':
+    try {
+        const usersEmbed = new EmbedBuilder()
+            .setColor('#00ff00')
+            .setTitle('👥 User Status')
+            .setDescription('Current status of monitored users:');
+        
+        for (const username of CONFIG.MONITORED_USERS) {
+            const status = userStatuses.get(username);
+            const statusText = status && status.isOnline ? '🟢 Online' : '🔴 Offline';
+            const gameLabel = status && (status.gameName || status.currentGame) ? ` (Game: ${status.gameName || status.currentGame})` : '';
+            usersEmbed.addFields({ name: username, value: statusText + gameLabel, inline: true });
+        }
+        
+        usersEmbed.setTimestamp();
+        await message.reply({ embeds: [usersEmbed] });
+        console.log('Users command executed successfully');
+    } catch (error) {
+        console.error('Error in users command:', error);
+        await message.reply('❌ Error showing user statuses. Try again later.');
+    }
+    break;
+                
+            case 'start':
+                if (!isMonitoring) {
+                    isMonitoring = true;
+                    checkUserStatuses();
+                    await message.reply('✅ Monitoring started!');
+                } else {
+                    await message.reply('⚠️ Monitoring is already active!');
+                }
+                break;
+                
+            case 'stop':
+                if (isMonitoring) {
+                    isMonitoring = false;
+                    await message.reply('⏹️ Monitoring stopped!');
+                } else {
+                    await message.reply('⚠️ Monitoring is already stopped!');
+                }
+                break;
+                
+            case 'help':
+                const helpEmbed = new EmbedBuilder()
+                    .setColor('#0099ff')
+                    .setTitle('🤖 Bot Commands')
+                    .addFields(
+                        { name: '!help', value: 'Show this help message', inline: false },
+                        { name: '!status', value: 'Show current monitor status', inline: false },
+                        { name: '!users', value: 'Show current user statuses', inline: false },
+                        { name: '!start', value: 'Start monitoring', inline: false },
+                        { name: '!stop', value: 'Stop monitoring', inline: false }
+                    )
+                    .setTimestamp();
+                
+                await message.reply({ embeds: [helpEmbed] });
+                console.log('Help command executed successfully'); // Debug log
+                break;
+                
+            default:
+                console.log(`Unknown command: ${command}`); // Debug log
+                break;
+        }
+    } catch (error) {
+        console.error(`Error executing command ${command}:`, error);
+        await message.reply('❌ An error occurred while executing the command.');
+    }
+});
+
+// Error handling
+client.on('error', (error) => {
+    console.error('Discord client error:', error);
+});
+
+process.on('unhandledRejection', (error) => {
+    console.error('Unhandled promise rejection:', error);
+});
+
+// Login to Discord
+if (!CONFIG.DISCORD_TOKEN) {
+    console.error('❌ DISCORD_TOKEN is required in .env file!');
+    process.exit(1);
+}
+
+if (!CONFIG.DISCORD_CHANNEL_ID) {
+    console.error('❌ DISCORD_CHANNEL_ID is required in .env file!');
+    process.exit(1);
+}
+
+client.login(CONFIG.DISCORD_TOKEN);
