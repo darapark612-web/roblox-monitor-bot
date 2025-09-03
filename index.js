@@ -36,7 +36,12 @@ const CONFIG = {
     // NEW: Control offline notifications (default disabled)
     NOTIFY_ON_OFFLINE: typeof process.env.NOTIFY_ON_OFFLINE === 'string' 
         ? ['1','true','yes','y'].includes(process.env.NOTIFY_ON_OFFLINE.toLowerCase()) 
-        : false
+        : false,
+
+    // Optional: Single-game focus
+    TARGET_UNIVERSE_ID: process.env.TARGET_UNIVERSE_ID ? Number(process.env.TARGET_UNIVERSE_ID) : null,
+    TARGET_PLACE_ID: process.env.TARGET_PLACE_ID ? Number(process.env.TARGET_PLACE_ID) : null,
+    TARGET_GAME_NAME: process.env.TARGET_GAME_NAME || null
 };
 
 // Create Discord client
@@ -49,7 +54,7 @@ const client = new Client({
 });
 
 // Store user statuses
-let userStatuses = new Map(); // username -> { isOnline: boolean, lastSeen: Date, currentGame: string | null, gameName: string | null }
+let userStatuses = new Map(); // username -> { isOnline: boolean, lastSeen: Date, currentGame: string | null, gameName: string | null, universeId?: number | null }
 let isMonitoring = false;
 
 // Roblox API functions
@@ -95,6 +100,7 @@ async function getUserStatus(username) {
                 isOnline: presenceType !== 0,
                 currentGame: presence.placeId ? String(presence.placeId) : null,
                 gameName: gameName,
+                universeId: typeof presence.universeId === 'number' ? presence.universeId : (presence.universeId ? Number(presence.universeId) : null),
                 lastSeen: presence.lastOnline ? new Date(presence.lastOnline) : new Date()
             };
         }
@@ -163,9 +169,15 @@ async function resolveGameNameFromPresence(presence) {
         return presence.lastLocation;
     }
     if (presence && presence.universeId) {
+        if (CONFIG.TARGET_UNIVERSE_ID && Number(presence.universeId) === Number(CONFIG.TARGET_UNIVERSE_ID) && CONFIG.TARGET_GAME_NAME) {
+            return CONFIG.TARGET_GAME_NAME;
+        }
         return await getGameNameByUniverseId(presence.universeId);
     }
     if (presence && presence.placeId) {
+        if (CONFIG.TARGET_PLACE_ID && Number(presence.placeId) === Number(CONFIG.TARGET_PLACE_ID) && CONFIG.TARGET_GAME_NAME) {
+            return CONFIG.TARGET_GAME_NAME;
+        }
         const universeId = await getUniverseIdByPlaceId(presence.placeId);
         if (universeId) return await getGameNameByUniverseId(universeId);
     }
@@ -251,11 +263,21 @@ async function checkUserStatuses() {
             const currentStatus = await getUserStatus(username);
             const previousStatus = userStatuses.get(username);
 
-            const startedNewGame = (
+            // Decide if we should notify: either starting any new game, or specifically entering target game if configured
+            let startedNewGame = (
                 currentStatus.isOnline &&
                 !!currentStatus.currentGame &&
                 (!previousStatus || previousStatus.currentGame !== currentStatus.currentGame)
             );
+
+            if (CONFIG.TARGET_UNIVERSE_ID || CONFIG.TARGET_PLACE_ID) {
+                const isInTarget = (
+                    (CONFIG.TARGET_PLACE_ID && Number(currentStatus.currentGame) === Number(CONFIG.TARGET_PLACE_ID)) ||
+                    (CONFIG.TARGET_UNIVERSE_ID && previousStatus && previousStatus.universeId !== CONFIG.TARGET_UNIVERSE_ID) // fallback requires universeId in status (not stored); handled via name resolver anyway
+                );
+                // If target specified, only notify when entering the target
+                startedNewGame = startedNewGame && isInTarget;
+            }
             const justWentOffline = !currentStatus.isOnline && previousStatus && previousStatus.isOnline;
 
             if (startedNewGame) {
