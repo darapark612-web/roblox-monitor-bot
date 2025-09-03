@@ -326,7 +326,6 @@ async function checkUserStatuses() {
             // Join ping: when user becomes in-game (presenceType=2) for the first time or switches games
             const startedNewGame = (
                 currentStatus.isInGame &&
-                !!currentStatus.currentGame &&
                 (!previousStatus || !previousStatus.isInGame || previousStatus.currentGame !== currentStatus.currentGame)
             );
             const justWentOffline = !currentStatus.isOnline && previousStatus && previousStatus.isOnline;
