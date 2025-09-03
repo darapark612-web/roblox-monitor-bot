@@ -57,6 +57,13 @@ const usernameToIdCache = new Map();
 const universeIdToGameName = new Map();
 const placeIdToUniverseId = new Map();
 
+// Discord embed field safety helper
+function safeField(name, value, inline = true) {
+    const safeName = String(name).slice(0, 256) || '\u200b';
+    const safeValue = String(value).slice(0, 1024) || '\u200b';
+    return { name: safeName, value: safeValue, inline };
+}
+
 async function getUserId(username) {
     if (usernameToIdCache.has(username)) return usernameToIdCache.get(username);
     const res = await axios.post(
@@ -362,25 +369,95 @@ client.on('messageCreate', async (message) => {
                 
 case 'users':
     try {
-        const usersEmbed = new EmbedBuilder()
-            .setColor('#00ff00')
-            .setTitle('👥 User Status')
-            .setDescription('Current status of monitored users:');
-        
+        const fields = [];
         for (const username of CONFIG.MONITORED_USERS) {
             const status = userStatuses.get(username);
-            const statusText = status && status.isOnline ? '🟢 Online' : '🔴 Offline';
+            const isOnline = !!(status && status.isOnline);
+            const statusText = isOnline ? '🟢 Online' : '🔴 Offline';
             const gameTitle = status && (status.gameName || status.currentGame) ? (status.gameName || status.currentGame) : null;
-            const gameLabel = gameTitle ? ` (Game: ${gameTitle})` : '';
-            usersEmbed.addFields({ name: username, value: statusText + gameLabel, inline: true });
+            const gameLabel = isOnline && gameTitle ? ` (Game: ${gameTitle})` : '';
+            fields.push(safeField(username, statusText + gameLabel, true));
         }
-        
-        usersEmbed.setTimestamp();
-        await message.reply({ embeds: [usersEmbed] });
+
+        if (fields.length === 0) {
+            await message.reply('No monitored users configured.');
+            break;
+        }
+
+        // Discord limit: 25 fields per embed
+        const chunks = [];
+        for (let i = 0; i < fields.length; i += 25) {
+            chunks.push(fields.slice(i, i + 25));
+        }
+
+        for (let index = 0; index < chunks.length; index++) {
+            try {
+                const embed = new EmbedBuilder()
+                    .setColor('#00ff00')
+                    .setTitle('👥 User Status')
+                    .setDescription('Current status of monitored users:')
+                    .addFields(chunks[index])
+                    .setTimestamp();
+                if (index === 0) {
+                    await message.reply({ embeds: [embed] });
+                } else {
+                    await message.channel.send({ embeds: [embed] });
+                }
+            } catch (sendErr) {
+                console.error('Error sending users embed chunk:', sendErr);
+            }
+        }
         console.log('Users command executed successfully');
     } catch (error) {
         console.error('Error in users command:', error);
         await message.reply('❌ Error showing user statuses. Try again later.');
+    }
+    break;
+
+case 'games':
+    try {
+        // Build list of online users with their games
+        const onlineEntries = [];
+        for (const username of CONFIG.MONITORED_USERS) {
+            const status = userStatuses.get(username);
+            if (status && status.isOnline) {
+                const gameTitle = status.gameName || status.currentGame || 'Unknown game';
+                onlineEntries.push(safeField(username, gameTitle, true));
+            }
+        }
+
+        if (onlineEntries.length === 0) {
+            await message.reply('No monitored users are online right now.');
+            break;
+        }
+
+        // Chunk into 25 fields per embed
+        const chunks = [];
+        for (let i = 0; i < onlineEntries.length; i += 25) {
+            chunks.push(onlineEntries.slice(i, i + 25));
+        }
+
+        for (let index = 0; index < chunks.length; index++) {
+            try {
+                const embed = new EmbedBuilder()
+                    .setColor('#5865F2')
+                    .setTitle('🎮 Online Users and Games')
+                    .setDescription('Users currently in games:')
+                    .addFields(chunks[index])
+                    .setTimestamp();
+                if (index === 0) {
+                    await message.reply({ embeds: [embed] });
+                } else {
+                    await message.channel.send({ embeds: [embed] });
+                }
+            } catch (sendErr) {
+                console.error('Error sending games embed chunk:', sendErr);
+            }
+        }
+        console.log('Games command executed successfully');
+    } catch (error) {
+        console.error('Error in games command:', error);
+        await message.reply('❌ Error showing games. Try again later.');
     }
     break;
                 
