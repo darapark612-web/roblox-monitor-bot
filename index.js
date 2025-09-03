@@ -59,7 +59,7 @@ const client = new Client({
 });
 
 // Store user statuses
-let userStatuses = new Map(); // username -> { isOnline: boolean, lastSeen: Date, currentGame: string | null, gameName: string | null, universeId?: number | null }
+let userStatuses = new Map(); // username -> { isOnline: boolean, isInGame: boolean, lastSeen: Date, currentGame: string | null, gameName: string | null, universeId?: number | null }
 let isMonitoring = false;
 
 // Roblox API functions
@@ -144,6 +144,7 @@ async function getUserStatus(username) {
             const gameName = await resolveGameNameFromPresence(presence);
             return {
                 isOnline: presenceType !== 0,
+                isInGame: presenceType === 2,
                 currentGame: presence.placeId ? String(presence.placeId) : null,
                 gameName: gameName,
                 universeId: typeof presence.universeId === 'number' ? presence.universeId : (presence.universeId ? Number(presence.universeId) : null),
@@ -151,27 +152,12 @@ async function getUserStatus(username) {
             };
         }
         
-        return { isOnline: false, currentGame: null, lastSeen: new Date() };
+        return { isOnline: false, isInGame: false, currentGame: null, gameName: null, lastSeen: new Date() };
     } catch (error) {
         const status = error.response && error.response.status;
         const data = error.response && error.response.data;
         console.error(`Error fetching status for ${username}:`, status, data || error.message);
-        return { isOnline: false, currentGame: null, lastSeen: new Date() };
-    }
-}
-
-async function getUserGroupInfo(username, groupId) {
-    try {
-        const userId = await getUserId(username);
-        const groupResponse = await getWithFallback(BASES.groups, `/v1/users/${userId}/groups`);
-        const userGroups = (groupResponse.data && groupResponse.data.data) || [];
-        const targetGroup = userGroups.find(group => group.group && group.group.id === parseInt(groupId));
-        return targetGroup ? { isInGroup: true, rank: targetGroup.role.rank, roleName: targetGroup.role.name } : { isInGroup: false, rank: 0, roleName: '' };
-    } catch (error) {
-        const status = error.response && error.response.status;
-        const data = error.response && error.response.data;
-        console.error('Error fetching user group info:', status, data || error.message);
-        return { isInGroup: false, rank: 0, roleName: '' };
+        return { isOnline: false, isInGame: false, currentGame: null, gameName: null, lastSeen: new Date() };
     }
 }
 
@@ -186,9 +172,7 @@ async function getGameNameByUniverseId(universeId) {
             universeIdToGameName.set(universeId, name);
             return name;
         }
-    } catch (err) {
-        // Swallow and fallback
-    }
+    } catch (err) {}
     return null;
 }
 
@@ -202,16 +186,12 @@ async function getUniverseIdByPlaceId(placeId) {
             placeIdToUniverseId.set(placeId, universeId);
             return universeId;
         }
-    } catch (err) {
-        // Swallow and fallback
-    }
+    } catch (err) {}
     return null;
 }
 
 async function resolveGameNameFromPresence(presence) {
-    // Prefer explicit lastLocation if it looks like a game title
     if (presence && typeof presence.lastLocation === 'string' && presence.lastLocation.length > 0 && presence.lastLocation.toLowerCase() !== 'website') {
-        // lastLocation sometimes already contains the place/game name
         return presence.lastLocation;
     }
     if (presence && presence.universeId) {
@@ -289,10 +269,9 @@ async function sendDiscordNotification(embed, pingEveryone = false) {
     try {
         const channel = await client.channels.fetch(CONFIG.DISCORD_CHANNEL_ID);
         
-        // Create the message content
         let messageContent = '';
         if (pingEveryone && CONFIG.PING_EVERYONE) {
-            messageContent = '@everyone'; // This pings everyone in the server
+            messageContent = '@everyone';
         }
         
         await channel.send({ 
@@ -312,16 +291,15 @@ async function checkUserStatuses() {
     try {
         console.log('Checking user statuses...');
         
-        // Check monitored users (notify only when a user starts a new game)
         for (const username of CONFIG.MONITORED_USERS) {
             const currentStatus = await getUserStatus(username);
             const previousStatus = userStatuses.get(username);
 
-            // Notify when the user joins ANY game (first detection or game change)
+            // Join ping: when user becomes in-game for the first time or switches games
             const startedNewGame = (
-                currentStatus.isOnline &&
+                currentStatus.isInGame &&
                 !!currentStatus.currentGame &&
-                (!previousStatus || previousStatus.currentGame !== currentStatus.currentGame)
+                (!previousStatus || !previousStatus.isInGame || previousStatus.currentGame !== currentStatus.currentGame)
             );
             const justWentOffline = !currentStatus.isOnline && previousStatus && previousStatus.isOnline;
 
@@ -331,10 +309,10 @@ async function checkUserStatuses() {
                 await sendDiscordNotification(embed, true);
             }
 
-            // Notify (no ping) when they leave a game (became offline or left to no game)
+            // Leave game message (no ping)
             const leftGame = (
-                previousStatus && previousStatus.currentGame && (
-                    (!currentStatus.isOnline) || (currentStatus.isOnline && !currentStatus.currentGame)
+                previousStatus && previousStatus.isInGame && (
+                    !currentStatus.isInGame || !currentStatus.currentGame
                 )
             );
             if (leftGame) {
@@ -342,11 +320,9 @@ async function checkUserStatuses() {
                 await sendDiscordNotification(embed, false);
             }
 
-            // Update status
             userStatuses.set(username, currentStatus);
         }
         
-        // Update bot status
         const onlineUsers = Array.from(userStatuses.values()).filter(status => status.isOnline).length;
         client.user.setActivity(`Monitoring ${onlineUsers} users online`, { type: 3 });
         
@@ -364,14 +340,11 @@ client.once('ready', () => {
     console.log(`ℹ️ Showing rank info for all group members: ${CONFIG.SHOW_GROUP_RANKS}`);
     console.log(`🔔 Pinging everyone on join: ${CONFIG.PING_EVERYONE}`);
     
-    // Set bot status
     client.user.setActivity('Setting up monitoring...', { type: 3 });
     
-    // Start monitoring
     isMonitoring = true;
     checkUserStatuses();
     
-    // Schedule regular checks
     setInterval(checkUserStatuses, CONFIG.CHECK_INTERVAL * 1000);
     
     console.log('✅ Monitoring started successfully!');
@@ -379,19 +352,17 @@ client.once('ready', () => {
 
 // Bot commands
 client.on('messageCreate', async (message) => {
-    // Ignore bot messages
     if (message.author.bot) return;
     
-    // Check if message starts with our prefix
     const prefix = '!';
     if (!message.content.startsWith(prefix)) return;
     
-    console.log(`Command received: ${message.content}`); // Debug log
+    console.log(`Command received: ${message.content}`);
     
     const args = message.content.slice(prefix.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
     
-    console.log(`Command: ${command}, Args: ${args}`); // Debug log
+    console.log(`Command: ${command}, Args: ${args}`);
     
     try {
         switch (command) {
@@ -414,7 +385,7 @@ client.on('messageCreate', async (message) => {
                     .setTimestamp();
                 
                 await message.reply({ embeds: [statusEmbed] });
-                console.log('Status command executed successfully'); // Debug log
+                console.log('Status command executed successfully');
                 break;
                 
 case 'users':
@@ -425,7 +396,7 @@ case 'users':
             const isOnline = !!(status && status.isOnline);
             const statusText = isOnline ? '🟢 Online' : '🔴 Offline';
             const gameTitle = status && (status.gameName || status.currentGame) ? (status.gameName || status.currentGame) : null;
-            const gameLabel = isOnline && gameTitle ? ` (Game: ${gameTitle})` : '';
+            const gameLabel = status && status.isInGame && gameTitle ? ` (Game: ${gameTitle})` : '';
             fields.push(safeField(username, statusText + gameLabel, true));
         }
 
@@ -434,7 +405,6 @@ case 'users':
             break;
         }
 
-        // Discord limit: 25 fields per embed
         const chunks = [];
         for (let i = 0; i < fields.length; i += 25) {
             chunks.push(fields.slice(i, i + 25));
@@ -466,22 +436,20 @@ case 'users':
 
 case 'games':
     try {
-        // Build list of online users with their games
         const onlineEntries = [];
         for (const username of CONFIG.MONITORED_USERS) {
             const status = userStatuses.get(username);
-            if (status && status.isOnline) {
+            if (status && status.isInGame) {
                 const gameTitle = status.gameName || status.currentGame || 'Unknown game';
                 onlineEntries.push(safeField(username, gameTitle, true));
             }
         }
 
         if (onlineEntries.length === 0) {
-            await message.reply('No monitored users are online right now.');
+            await message.reply('No monitored users are in a game right now.');
             break;
         }
 
-        // Chunk into 25 fields per embed
         const chunks = [];
         for (let i = 0; i < onlineEntries.length; i += 25) {
             chunks.push(onlineEntries.slice(i, i + 25));
@@ -538,17 +506,18 @@ case 'games':
                         { name: '!help', value: 'Show this help message', inline: false },
                         { name: '!status', value: 'Show current monitor status', inline: false },
                         { name: '!users', value: 'Show current user statuses', inline: false },
+                        { name: '!games', value: 'Show online users and their games', inline: false },
                         { name: '!start', value: 'Start monitoring', inline: false },
                         { name: '!stop', value: 'Stop monitoring', inline: false }
                     )
                     .setTimestamp();
                 
                 await message.reply({ embeds: [helpEmbed] });
-                console.log('Help command executed successfully'); // Debug log
+                console.log('Help command executed successfully');
                 break;
                 
             default:
-                console.log(`Unknown command: ${command}`); // Debug log
+                console.log(`Unknown command: ${command}`);
                 break;
         }
     } catch (error) {
