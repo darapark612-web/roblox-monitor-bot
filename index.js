@@ -69,10 +69,46 @@ function safeField(name, value, inline = true) {
     return { name: safeName, value: safeValue, inline };
 }
 
+// Fallback-capable HTTP helpers and base domains
+const BASES = {
+    users: [process.env.USERS_BASE || 'https://users.roproxy.com', 'https://users.roblox.com'],
+    presence: [process.env.PRESENCE_BASE || 'https://presence.roproxy.com', 'https://presence.roblox.com'],
+    groups: [process.env.GROUPS_BASE || 'https://groups.roproxy.com', 'https://groups.roblox.com'],
+    games: [process.env.GAMES_BASE || 'https://games.roproxy.com', 'https://games.roblox.com'],
+    apis: [process.env.APIS_BASE || 'https://apis.roproxy.com', 'https://apis.roblox.com']
+};
+
+async function getWithFallback(bases, path, config = {}) {
+    let lastErr;
+    for (const base of bases) {
+        try {
+            return await axios.get(`${base}${path}`, config);
+        } catch (err) {
+            lastErr = err;
+            continue;
+        }
+    }
+    throw lastErr;
+}
+
+async function postWithFallback(bases, path, data, config = {}) {
+    let lastErr;
+    for (const base of bases) {
+        try {
+            return await axios.post(`${base}${path}`, data, config);
+        } catch (err) {
+            lastErr = err;
+            continue;
+        }
+    }
+    throw lastErr;
+}
+
 async function getUserId(username) {
     if (usernameToIdCache.has(username)) return usernameToIdCache.get(username);
-    const res = await axios.post(
-        'https://users.roproxy.com/v1/usernames/users',
+    const res = await postWithFallback(
+        BASES.users,
+        '/v1/usernames/users',
         { usernames: [username], excludeBannedUsers: true },
         { headers: { 'Content-Type': 'application/json' } }
     );
@@ -86,8 +122,9 @@ async function getUserStatus(username) {
     try {
         const userId = await getUserId(username);
         // Presence API requires POST with JSON body. Use roproxy to avoid auth.
-        const statusResponse = await axios.post(
-            'https://presence.roproxy.com/v1/presence/users',
+        const statusResponse = await postWithFallback(
+            BASES.presence,
+            '/v1/presence/users',
             { userIds: [userId] },
             { headers: { 'Content-Type': 'application/json' } }
         );
@@ -117,7 +154,7 @@ async function getUserStatus(username) {
 async function getUserGroupInfo(username, groupId) {
     try {
         const userId = await getUserId(username);
-        const groupResponse = await axios.get(`https://groups.roproxy.com/v1/users/${userId}/groups`);
+        const groupResponse = await getWithFallback(BASES.groups, `/v1/users/${userId}/groups`);
         const userGroups = (groupResponse.data && groupResponse.data.data) || [];
         const targetGroup = userGroups.find(group => group.group && group.group.id === parseInt(groupId));
         return targetGroup ? { isInGroup: true, rank: targetGroup.role.rank, roleName: targetGroup.role.name } : { isInGroup: false, rank: 0, roleName: '' };
@@ -134,7 +171,7 @@ async function getGameNameByUniverseId(universeId) {
     if (!universeId) return null;
     if (universeIdToGameName.has(universeId)) return universeIdToGameName.get(universeId);
     try {
-        const res = await axios.get(`https://games.roproxy.com/v1/games?universeIds=${universeId}`);
+        const res = await getWithFallback(BASES.games, `/v1/games?universeIds=${universeId}`);
         const name = res.data && res.data.data && res.data.data[0] && res.data.data[0].name;
         if (name) {
             universeIdToGameName.set(universeId, name);
@@ -150,7 +187,7 @@ async function getUniverseIdByPlaceId(placeId) {
     if (!placeId) return null;
     if (placeIdToUniverseId.has(placeId)) return placeIdToUniverseId.get(placeId);
     try {
-        const res = await axios.get(`https://apis.roproxy.com/universes/v1/places/${placeId}/universe`);
+        const res = await getWithFallback(BASES.apis, `/universes/v1/places/${placeId}/universe`);
         const universeId = res.data && res.data.universeId;
         if (universeId) {
             placeIdToUniverseId.set(placeId, universeId);
