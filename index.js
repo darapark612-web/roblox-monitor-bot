@@ -248,6 +248,14 @@ function createNotificationEmbed(username, type, rank = null, roleName = null, g
             .setTitle('🔴 User Offline!')
             .setDescription(`${username} is now offline on Roblox!`)
             .setTimestamp();
+    } else if (type === 'user_left_game') {
+        embed.setColor('#FFA500')
+            .setTitle('⏹️ User Left Game')
+            .setDescription(`${username} left the game`)
+            .setTimestamp();
+        if (gameName) {
+            embed.addFields({ name: 'Game', value: gameName, inline: true });
+        }
     } else if (type === 'group_member_online') {
         embed.setColor('#00FF00')
             .setTitle('👥 Group Member Online!')
@@ -309,58 +317,28 @@ async function checkUserStatuses() {
             const currentStatus = await getUserStatus(username);
             const previousStatus = userStatuses.get(username);
 
-            // Decide if we should notify: either starting any new game, or specifically entering target game if configured
-            let startedNewGame = (
+            // Notify when the user joins ANY game (first detection or game change)
+            const startedNewGame = (
                 currentStatus.isOnline &&
                 !!currentStatus.currentGame &&
                 (!previousStatus || previousStatus.currentGame !== currentStatus.currentGame)
             );
-
-            if (CONFIG.TARGET_UNIVERSE_ID || CONFIG.TARGET_PLACE_ID) {
-                const isInTargetNow = (
-                    (CONFIG.TARGET_PLACE_ID && Number(currentStatus.currentGame) === Number(CONFIG.TARGET_PLACE_ID)) ||
-                    (CONFIG.TARGET_UNIVERSE_ID && currentStatus.universeId && Number(currentStatus.universeId) === Number(CONFIG.TARGET_UNIVERSE_ID))
-                );
-                const wasInTargetBefore = previousStatus && (
-                    (CONFIG.TARGET_PLACE_ID && Number(previousStatus.currentGame) === Number(CONFIG.TARGET_PLACE_ID)) ||
-                    (CONFIG.TARGET_UNIVERSE_ID && previousStatus.universeId && Number(previousStatus.universeId) === Number(CONFIG.TARGET_UNIVERSE_ID))
-                );
-                // Only notify when entering target from not-in-target
-                startedNewGame = isInTargetNow && !wasInTargetBefore;
-            }
             const justWentOffline = !currentStatus.isOnline && previousStatus && previousStatus.isOnline;
 
             if (startedNewGame) {
                 console.log(`🔔 ${username} started a new game: ${currentStatus.gameName || currentStatus.currentGame}`);
-                // Optionally include group/rank in the first online ping
-                let groupRank = null;
-                let roleName = null;
-                try {
-                    if (CONFIG.NOTIFY_GROUP_MEMBERS || CONFIG.NOTIFY_GROUP_RANKS) {
-                        const groupInfo = await getUserGroupInfo(username, CONFIG.GROUP_ID);
-                        if (groupInfo.isInGroup) {
-                            groupRank = groupInfo.rank;
-                            roleName = groupInfo.roleName;
-                        }
-                    }
-                } catch {}
-
-                // High-rank special formatting if enabled
-                if (groupRank !== null && CONFIG.NOTIFY_GROUP_RANKS && CONFIG.MONITORED_RANKS.includes(groupRank)) {
-                    const embed = createNotificationEmbed(username, 'high_rank_online', groupRank, roleName, currentStatus.gameName || currentStatus.currentGame);
-                    await sendDiscordNotification(embed, true);
-                } else if (groupRank !== null && CONFIG.NOTIFY_GROUP_MEMBERS) {
-                    const embed = createNotificationEmbed(username, 'group_member_online', groupRank, roleName, currentStatus.gameName || currentStatus.currentGame);
-                    await sendDiscordNotification(embed, true);
-                } else {
-                    const embed = createNotificationEmbed(username, 'user_online', null, null, currentStatus.gameName || currentStatus.currentGame);
-                    await sendDiscordNotification(embed, true);
-                }
+                const embed = createNotificationEmbed(username, 'user_online', null, null, currentStatus.gameName || currentStatus.currentGame);
+                await sendDiscordNotification(embed, true);
             }
 
-            if (justWentOffline && CONFIG.NOTIFY_ON_OFFLINE) {
-                console.log(`🔕 ${username} went offline (notification enabled).`);
-                const embed = createNotificationEmbed(username, 'user_offline');
+            // Notify (no ping) when they leave a game (became offline or left to no game)
+            const leftGame = (
+                previousStatus && previousStatus.currentGame && (
+                    (!currentStatus.isOnline) || (currentStatus.isOnline && !currentStatus.currentGame)
+                )
+            );
+            if (leftGame) {
+                const embed = createNotificationEmbed(username, 'user_left_game', null, null, previousStatus.gameName || previousStatus.currentGame);
                 await sendDiscordNotification(embed, false);
             }
 
