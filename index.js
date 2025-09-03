@@ -57,6 +57,13 @@ const usernameToIdCache = new Map();
 const universeIdToGameName = new Map();
 const placeIdToUniverseId = new Map();
 
+// Discord embed field safety helper
+function safeField(name, value, inline = true) {
+    const safeName = String(name).slice(0, 256) || '\u200b';
+    const safeValue = String(value).slice(0, 1024) || '\u200b';
+    return { name: safeName, value: safeValue, inline };
+}
+
 async function getUserId(username) {
     if (usernameToIdCache.has(username)) return usernameToIdCache.get(username);
     const res = await axios.post(
@@ -369,7 +376,7 @@ case 'users':
             const statusText = isOnline ? '🟢 Online' : '🔴 Offline';
             const gameTitle = status && (status.gameName || status.currentGame) ? (status.gameName || status.currentGame) : null;
             const gameLabel = isOnline && gameTitle ? ` (Game: ${gameTitle})` : '';
-            fields.push({ name: username, value: statusText + gameLabel, inline: true });
+            fields.push(safeField(username, statusText + gameLabel, true));
         }
 
         if (fields.length === 0) {
@@ -384,16 +391,20 @@ case 'users':
         }
 
         for (let index = 0; index < chunks.length; index++) {
-            const embed = new EmbedBuilder()
-                .setColor('#00ff00')
-                .setTitle('👥 User Status')
-                .setDescription('Current status of monitored users:')
-                .addFields(chunks[index])
-                .setTimestamp();
-            if (index === 0) {
-                await message.reply({ embeds: [embed] });
-            } else {
-                await message.channel.send({ embeds: [embed] });
+            try {
+                const embed = new EmbedBuilder()
+                    .setColor('#00ff00')
+                    .setTitle('👥 User Status')
+                    .setDescription('Current status of monitored users:')
+                    .addFields(chunks[index])
+                    .setTimestamp();
+                if (index === 0) {
+                    await message.reply({ embeds: [embed] });
+                } else {
+                    await message.channel.send({ embeds: [embed] });
+                }
+            } catch (sendErr) {
+                console.error('Error sending users embed chunk:', sendErr);
             }
         }
         console.log('Users command executed successfully');
@@ -411,7 +422,7 @@ case 'games':
             const status = userStatuses.get(username);
             if (status && status.isOnline) {
                 const gameTitle = status.gameName || status.currentGame || 'Unknown game';
-                onlineEntries.push({ name: username, value: gameTitle, inline: true });
+                onlineEntries.push(safeField(username, gameTitle, true));
             }
         }
 
@@ -427,16 +438,20 @@ case 'games':
         }
 
         for (let index = 0; index < chunks.length; index++) {
-            const embed = new EmbedBuilder()
-                .setColor('#5865F2')
-                .setTitle('🎮 Online Users and Games')
-                .setDescription('Users currently in games:')
-                .addFields(chunks[index])
-                .setTimestamp();
-            if (index === 0) {
-                await message.reply({ embeds: [embed] });
-            } else {
-                await message.channel.send({ embeds: [embed] });
+            try {
+                const embed = new EmbedBuilder()
+                    .setColor('#5865F2')
+                    .setTitle('🎮 Online Users and Games')
+                    .setDescription('Users currently in games:')
+                    .addFields(chunks[index])
+                    .setTimestamp();
+                if (index === 0) {
+                    await message.reply({ embeds: [embed] });
+                } else {
+                    await message.channel.send({ embeds: [embed] });
+                }
+            } catch (sendErr) {
+                console.error('Error sending games embed chunk:', sendErr);
             }
         }
         console.log('Games command executed successfully');
