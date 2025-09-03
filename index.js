@@ -48,47 +48,61 @@ let userStatuses = new Map(); // username -> { isOnline: boolean, lastSeen: Date
 let isMonitoring = false;
 
 // Roblox API functions
+const usernameToIdCache = new Map();
+
+async function getUserId(username) {
+    if (usernameToIdCache.has(username)) return usernameToIdCache.get(username);
+    const res = await axios.post(
+        'https://users.roblox.com/v1/usernames/users',
+        { usernames: [username], excludeBannedUsers: true },
+        { headers: { 'Content-Type': 'application/json' } }
+    );
+    const hit = res.data && res.data.data && res.data.data[0];
+    if (!hit || !hit.id) throw new Error(`Username not found: ${username}`);
+    usernameToIdCache.set(username, hit.id);
+    return hit.id;
+}
+
 async function getUserStatus(username) {
     try {
-        // Get user ID first
-        const userResponse = await axios.get(`https://api.roblox.com/users/get-by-username?username=${username}`);
-        const userId = userResponse.data.Id;
+        const userId = await getUserId(username);
+        // Presence API requires POST with JSON body. Use roproxy to avoid auth.
+        const statusResponse = await axios.post(
+            'https://presence.roproxy.com/v1/presence/users',
+            { userIds: [userId] },
+            { headers: { 'Content-Type': 'application/json' } }
+        );
         
-        // Get user's current status
-        const statusResponse = await axios.get(`https://presence.roblox.com/v1/presence/users`, {
-            data: { userIds: [userId] }
-        });
-        
-        if (statusResponse.data.userPresences && statusResponse.data.userPresences[0]) {
-            const presence = statusResponse.data.userPresences[0];
+        const presence = statusResponse.data && statusResponse.data.userPresences && statusResponse.data.userPresences[0];
+        if (presence) {
+            const presenceType = presence.userPresenceType ?? 0; // 0=Offline, 1=Online, 2=InGame, 3=InStudio
             return {
-                isOnline: presence.userPresenceType === 2, // 2 = Online
-                currentGame: presence.placeId ? presence.placeId.toString() : null,
-                lastSeen: new Date(presence.lastOnline)
+                isOnline: presenceType !== 0,
+                currentGame: presence.placeId ? String(presence.placeId) : null,
+                lastSeen: presence.lastOnline ? new Date(presence.lastOnline) : new Date()
             };
         }
         
         return { isOnline: false, currentGame: null, lastSeen: new Date() };
     } catch (error) {
-        console.error(`Error fetching status for ${username}:`, error.message);
+        const status = error.response && error.response.status;
+        const data = error.response && error.response.data;
+        console.error(`Error fetching status for ${username}:`, status, data || error.message);
         return { isOnline: false, currentGame: null, lastSeen: new Date() };
     }
 }
 
 async function getUserGroupInfo(username, groupId) {
     try {
-        // First get user ID
-        const userResponse = await axios.get(`https://api.roblox.com/users/get-by-username?username=${username}`);
-        const userId = userResponse.data.Id;
-        
-        // Then get group info
+        const userId = await getUserId(username);
         const groupResponse = await axios.get(`https://groups.roblox.com/v1/users/${userId}/groups`);
-        const userGroups = groupResponse.data.data;
-        
-        const targetGroup = userGroups.find(group => group.group.id === parseInt(groupId));
+        const userGroups = (groupResponse.data && groupResponse.data.data) || [];
+        const targetGroup = userGroups.find(group => group.group && group.group.id === parseInt(groupId));
         return targetGroup ? { isInGroup: true, rank: targetGroup.role.rank, roleName: targetGroup.role.name } : { isInGroup: false, rank: 0, roleName: '' };
     } catch (error) {
-        console.error('Error fetching user group info:', error.message);
+        const status = error.response && error.response.status;
+        const data = error.response && error.response.data;
+        console.error('Error fetching user group info:', status, data || error.message);
         return { isInGroup: false, rank: 0, roleName: '' };
     }
 }
