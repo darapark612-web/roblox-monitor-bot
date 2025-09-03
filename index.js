@@ -44,11 +44,13 @@ const client = new Client({
 });
 
 // Store user statuses
-let userStatuses = new Map(); // username -> { isOnline: boolean, lastSeen: Date, currentGame: string }
+let userStatuses = new Map(); // username -> { isOnline: boolean, lastSeen: Date, currentGame: string | null, gameName: string | null }
 let isMonitoring = false;
 
 // Roblox API functions
 const usernameToIdCache = new Map();
+const universeIdToGameName = new Map();
+const placeIdToUniverseId = new Map();
 
 async function getUserId(username) {
     if (usernameToIdCache.has(username)) return usernameToIdCache.get(username);
@@ -76,9 +78,11 @@ async function getUserStatus(username) {
         const presence = statusResponse.data && statusResponse.data.userPresences && statusResponse.data.userPresences[0];
         if (presence) {
             const presenceType = presence.userPresenceType ?? 0; // 0=Offline, 1=Online, 2=InGame, 3=InStudio
+            const gameName = await resolveGameNameFromPresence(presence);
             return {
                 isOnline: presenceType !== 0,
                 currentGame: presence.placeId ? String(presence.placeId) : null,
+                gameName: gameName,
                 lastSeen: presence.lastOnline ? new Date(presence.lastOnline) : new Date()
             };
         }
@@ -105,6 +109,55 @@ async function getUserGroupInfo(username, groupId) {
         console.error('Error fetching user group info:', status, data || error.message);
         return { isInGroup: false, rank: 0, roleName: '' };
     }
+}
+
+// Resolve game name helpers
+async function getGameNameByUniverseId(universeId) {
+    if (!universeId) return null;
+    if (universeIdToGameName.has(universeId)) return universeIdToGameName.get(universeId);
+    try {
+        const res = await axios.get(`https://games.roproxy.com/v1/games?universeIds=${universeId}`);
+        const name = res.data && res.data.data && res.data.data[0] && res.data.data[0].name;
+        if (name) {
+            universeIdToGameName.set(universeId, name);
+            return name;
+        }
+    } catch (err) {
+        // Swallow and fallback
+    }
+    return null;
+}
+
+async function getUniverseIdByPlaceId(placeId) {
+    if (!placeId) return null;
+    if (placeIdToUniverseId.has(placeId)) return placeIdToUniverseId.get(placeId);
+    try {
+        const res = await axios.get(`https://apis.roproxy.com/universes/v1/places/${placeId}/universe`);
+        const universeId = res.data && res.data.universeId;
+        if (universeId) {
+            placeIdToUniverseId.set(placeId, universeId);
+            return universeId;
+        }
+    } catch (err) {
+        // Swallow and fallback
+    }
+    return null;
+}
+
+async function resolveGameNameFromPresence(presence) {
+    // Prefer explicit lastLocation if it looks like a game title
+    if (presence && typeof presence.lastLocation === 'string' && presence.lastLocation.length > 0 && presence.lastLocation.toLowerCase() !== 'website') {
+        // lastLocation sometimes already contains the place/game name
+        return presence.lastLocation;
+    }
+    if (presence && presence.universeId) {
+        return await getGameNameByUniverseId(presence.universeId);
+    }
+    if (presence && presence.placeId) {
+        const universeId = await getUniverseIdByPlaceId(presence.placeId);
+        if (universeId) return await getGameNameByUniverseId(universeId);
+    }
+    return null;
 }
 
 // Create notification embed
@@ -190,7 +243,7 @@ async function checkUserStatuses() {
             if (currentStatus.isOnline && (!previousStatus || !previousStatus.isOnline)) {
                 console.log(`🔔 ${username} came online!`);
                 
-                const embed = createNotificationEmbed(username, 'user_online', null, null, currentStatus.currentGame);
+                const embed = createNotificationEmbed(username, 'user_online', null, null, currentStatus.gameName || currentStatus.currentGame);
                 await sendDiscordNotification(embed, true);
             }
             
@@ -216,11 +269,11 @@ async function checkUserStatuses() {
                     // Group member is online
                     if (CONFIG.NOTIFY_GROUP_RANKS && CONFIG.MONITORED_RANKS.includes(groupInfo.rank)) {
                         // High rank member
-                        const embed = createNotificationEmbed(username, 'high_rank_online', groupInfo.rank, groupInfo.roleName, currentStatus.currentGame);
+                        const embed = createNotificationEmbed(username, 'high_rank_online', groupInfo.rank, groupInfo.roleName, currentStatus.gameName || currentStatus.currentGame);
                         await sendDiscordNotification(embed, true);
                     } else {
                         // Regular group member
-                        const embed = createNotificationEmbed(username, 'group_member_online', groupInfo.rank, groupInfo.roleName, currentStatus.currentGame);
+                        const embed = createNotificationEmbed(username, 'group_member_online', groupInfo.rank, groupInfo.roleName, currentStatus.gameName || currentStatus.currentGame);
                         await sendDiscordNotification(embed, true);
                     }
                 }
@@ -307,8 +360,8 @@ case 'users':
         for (const username of CONFIG.MONITORED_USERS) {
             const status = userStatuses.get(username);
             const statusText = status && status.isOnline ? '🟢 Online' : '🔴 Offline';
-            const gameText = status && status.currentGame ? ` (Game: ${status.currentGame})` : '';
-            usersEmbed.addFields({ name: username, value: statusText + gameText, inline: true });
+            const gameLabel = status && (status.gameName || status.currentGame) ? ` (Game: ${status.gameName || status.currentGame})` : '';
+            usersEmbed.addFields({ name: username, value: statusText + gameLabel, inline: true });
         }
         
         usersEmbed.setTimestamp();
