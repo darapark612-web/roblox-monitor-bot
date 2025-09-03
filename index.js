@@ -60,7 +60,7 @@ const placeIdToUniverseId = new Map();
 async function getUserId(username) {
     if (usernameToIdCache.has(username)) return usernameToIdCache.get(username);
     const res = await axios.post(
-        'https://users.roblox.com/v1/usernames/users',
+        'https://users.roproxy.com/v1/usernames/users',
         { usernames: [username], excludeBannedUsers: true },
         { headers: { 'Content-Type': 'application/json' } }
     );
@@ -104,7 +104,7 @@ async function getUserStatus(username) {
 async function getUserGroupInfo(username, groupId) {
     try {
         const userId = await getUserId(username);
-        const groupResponse = await axios.get(`https://groups.roblox.com/v1/users/${userId}/groups`);
+        const groupResponse = await axios.get(`https://groups.roproxy.com/v1/users/${userId}/groups`);
         const userGroups = (groupResponse.data && groupResponse.data.data) || [];
         const targetGroup = userGroups.find(group => group.group && group.group.id === parseInt(groupId));
         return targetGroup ? { isInGroup: true, rank: targetGroup.role.rank, roleName: targetGroup.role.name } : { isInGroup: false, rank: 0, roleName: '' };
