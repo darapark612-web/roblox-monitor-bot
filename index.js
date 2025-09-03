@@ -59,7 +59,9 @@ const client = new Client({
 });
 
 // Store user statuses
-let userStatuses = new Map(); // username -> { isOnline: boolean, lastSeen: Date, currentGame: string | null, gameName: string | null, universeId?: number | null }
+let userStatuses = new Map(); // username -> { isOnline: boolean, isInGame: boolean, lastSeen: Date, currentGame: string | null, gameName: string | null, universeId?: number | null }
+let isCheckingStatuses = false; // prevent overlapping checks
+const lastLeftNotifiedPlaceId = new Map(); // username -> last placeId left that we notified
 let isMonitoring = false;
 
 // Roblox API functions
@@ -309,6 +311,8 @@ async function sendDiscordNotification(embed, pingEveryone = false) {
 // Main monitoring function
 async function checkUserStatuses() {
     if (!isMonitoring) return;
+    if (isCheckingStatuses) return; // skip if previous tick still running
+    isCheckingStatuses = true;
     
     try {
         console.log('Checking user statuses...');
@@ -333,19 +337,29 @@ async function checkUserStatuses() {
                 await sendDiscordNotification(embed, true);
             }
 
-            // Notify (no ping) when they leave a game (became offline or left to no game)
+            // Notify (no ping) once when they leave a game (became not in-game or switched to no game)
             const leftGame = (
                 previousStatus && previousStatus.isInGame && (
                     !currentStatus.isInGame || !currentStatus.currentGame
                 )
             );
             if (leftGame) {
-                const embed = createNotificationEmbed(username, 'user_left_game', null, null, previousStatus.gameName || previousStatus.currentGame);
-                await sendDiscordNotification(embed, false);
+                const cacheKey = username;
+                const lastNotifiedPlace = lastLeftNotifiedPlaceId.get(cacheKey);
+                const justLeftPlace = previousStatus.currentGame || null;
+                if (justLeftPlace && lastNotifiedPlace !== justLeftPlace) {
+                    const embed = createNotificationEmbed(username, 'user_left_game', null, null, previousStatus.gameName || previousStatus.currentGame);
+                    await sendDiscordNotification(embed, false);
+                    lastLeftNotifiedPlaceId.set(cacheKey, justLeftPlace);
+                }
             }
 
             // Update status
             userStatuses.set(username, currentStatus);
+            // Clear left-game cache when they're currently in a game so that next leave will notify once
+            if (currentStatus && currentStatus.isInGame) {
+                lastLeftNotifiedPlaceId.delete(username);
+            }
         }
         
         // Update bot status
@@ -354,6 +368,8 @@ async function checkUserStatuses() {
         
     } catch (error) {
         console.error('Error checking user statuses:', error.message);
+    } finally {
+        isCheckingStatuses = false;
     }
 }
 
