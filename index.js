@@ -239,16 +239,20 @@ async function checkUserStatuses() {
     try {
         console.log('Checking user statuses...');
         
-        // Check monitored users (notify only on transitions)
+        // Check monitored users (notify only when a user starts a new game)
         for (const username of CONFIG.MONITORED_USERS) {
             const currentStatus = await getUserStatus(username);
             const previousStatus = userStatuses.get(username);
 
-            const justCameOnline = currentStatus.isOnline && (!previousStatus || !previousStatus.isOnline);
+            const startedNewGame = (
+                currentStatus.isOnline &&
+                !!currentStatus.currentGame &&
+                (!previousStatus || previousStatus.currentGame !== currentStatus.currentGame)
+            );
             const justWentOffline = !currentStatus.isOnline && previousStatus && previousStatus.isOnline;
 
-            if (justCameOnline) {
-                console.log(`🔔 ${username} came online!`);
+            if (startedNewGame) {
+                console.log(`🔔 ${username} started a new game: ${currentStatus.gameName || currentStatus.currentGame}`);
                 // Optionally include group/rank in the first online ping
                 let groupRank = null;
                 let roleName = null;
@@ -366,7 +370,8 @@ case 'users':
         for (const username of CONFIG.MONITORED_USERS) {
             const status = userStatuses.get(username);
             const statusText = status && status.isOnline ? '🟢 Online' : '🔴 Offline';
-            const gameLabel = status && (status.gameName || status.currentGame) ? ` (Game: ${status.gameName || status.currentGame})` : '';
+            const gameTitle = status && (status.gameName || status.currentGame) ? (status.gameName || status.currentGame) : null;
+            const gameLabel = gameTitle ? ` (Game: ${gameTitle})` : '';
             usersEmbed.addFields({ name: username, value: statusText + gameLabel, inline: true });
         }
         
