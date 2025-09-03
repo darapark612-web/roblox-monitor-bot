@@ -327,7 +327,7 @@ client.on('messageCreate', async (message) => {
     
     console.log(`Command received: ${message.content}`); // Debug log
     
-    const args = message content.slice(prefix.length).trim().split(/ +/);
+    const args = message.content.slice(prefix.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
     
     console.log(`Command: ${command}, Args: ${args}`); // Debug log
