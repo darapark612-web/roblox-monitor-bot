@@ -1,3 +1,4 @@
+
 const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const axios = require('axios');
 
@@ -44,6 +45,11 @@ const CONFIG = {
     TARGET_GAME_NAME: process.env.TARGET_GAME_NAME || '🍍Work at Kecai Restaurant!'
 };
 
+// Force roproxy-only (no fallback to roblox.com) unless explicitly disabled
+const NO_ROBLOX_FALLBACK = typeof process.env.NO_ROBLOX_FALLBACK === 'string'
+    ? ['1','true','yes','y'].includes(process.env.NO_ROBLOX_FALLBACK.toLowerCase())
+    : true;
+
 // Create Discord client
 const client = new Client({
     intents: [
@@ -70,12 +76,16 @@ function safeField(name, value, inline = true) {
 }
 
 // Fallback-capable HTTP helpers and base domains
+function bases(primary, secondary) {
+    return NO_ROBLOX_FALLBACK ? [primary] : [primary, secondary];
+}
+
 const BASES = {
-    users: [process.env.USERS_BASE || 'https://users.roproxy.com', 'https://users.roblox.com'],
-    presence: [process.env.PRESENCE_BASE || 'https://presence.roproxy.com', 'https://presence.roblox.com'],
-    groups: [process.env.GROUPS_BASE || 'https://groups.roproxy.com', 'https://groups.roblox.com'],
-    games: [process.env.GAMES_BASE || 'https://games.roproxy.com', 'https://games.roblox.com'],
-    apis: [process.env.APIS_BASE || 'https://apis.roproxy.com', 'https://apis.roblox.com']
+    users: bases(process.env.USERS_BASE || 'https://users.roproxy.com', 'https://users.roblox.com'),
+    presence: bases(process.env.PRESENCE_BASE || 'https://presence.roproxy.com', 'https://presence.roblox.com'),
+    groups: bases(process.env.GROUPS_BASE || 'https://groups.roproxy.com', 'https://groups.roblox.com'),
+    games: bases(process.env.GAMES_BASE || 'https://games.roproxy.com', 'https://games.roblox.com'),
+    apis: bases(process.env.APIS_BASE || 'https://apis.roproxy.com', 'https://apis.roblox.com')
 };
 
 async function getWithFallback(bases, path, config = {}) {
@@ -121,7 +131,7 @@ async function getUserId(username) {
 async function getUserStatus(username) {
     try {
         const userId = await getUserId(username);
-        // Presence API requires POST with JSON body. Use roproxy (and fallback) to avoid auth.
+        // Presence API requires POST with JSON body. Use roproxy to avoid auth.
         const statusResponse = await postWithFallback(
             BASES.presence,
             '/v1/presence/users',
@@ -295,7 +305,7 @@ async function checkUserStatuses() {
     try {
         console.log('Checking user statuses...');
         
-        // Check monitored users (notify only when a user starts a new game or enters target game)
+        // Check monitored users (notify only when a user starts a new game)
         for (const username of CONFIG.MONITORED_USERS) {
             const currentStatus = await getUserStatus(username);
             const previousStatus = userStatuses.get(username);
@@ -422,4 +432,172 @@ client.on('messageCreate', async (message) => {
                         { name: 'Check Interval', value: `${CONFIG.CHECK_INTERVAL}s`, inline: true },
                         { name: 'Show Group Ranks', value: CONFIG.SHOW_GROUP_RANKS ? '✅ Yes' : '❌ No', inline: true },
                         { name: 'Ping Everyone', value: CONFIG.PING_EVERYONE ? '✅ Yes' : '❌ No', inline: true },
-                        { name: 'Notify On Offline', value: CONFIG.NOTIFY_ON_OFFLINE ? '✅ Yes' : '❌ No', inline: true }\n                    )\n                    .setTimestamp();\n                \n                await message.reply({ embeds: [statusEmbed] });\n                console.log('Status command executed successfully'); // Debug log\n                break;\n                \ncase 'users':\n    try {\n        const fields = [];\n        for (const username of CONFIG.MONITORED_USERS) {\n            const status = userStatuses.get(username);\n            const isOnline = !!(status && status.isOnline);\n            const statusText = isOnline ? '🟢 Online' : '🔴 Offline';\n            const gameTitle = status && (status.gameName || status.currentGame) ? (status.gameName || status.currentGame) : null;\n            const gameLabel = isOnline && gameTitle ? ` (Game: ${gameTitle})` : '';\n            fields.push(safeField(username, statusText + gameLabel, true));\n        }\n\n        if (fields.length === 0) {\n            await message.reply('No monitored users configured.');\n            break;\n        }\n\n        // Discord limit: 25 fields per embed\n        const chunks = [];\n        for (let i = 0; i < fields.length; i += 25) {\n            chunks.push(fields.slice(i, i + 25));\n        }\n\n        for (let index = 0; index < chunks.length; index++) {\n            try {\n                const embed = new EmbedBuilder()\n                    .setColor('#00ff00')\n                    .setTitle('👥 User Status')\n                    .setDescription('Current status of monitored users:')\n                    .addFields(chunks[index])\n                    .setTimestamp();\n                if (index === 0) {\n                    await message.reply({ embeds: [embed] });\n                } else {\n                    await message.channel.send({ embeds: [embed] });\n                }\n            } catch (sendErr) {\n                console.error('Error sending users embed chunk:', sendErr);\n            }\n        }\n        console.log('Users command executed successfully');\n    } catch (error) {\n        console.error('Error in users command:', error);\n        await message.reply('❌ Error showing user statuses. Try again later.');\n    }\n    break;\n\ncase 'games':\n    try {\n        // Build list of online users with their games\n        const onlineEntries = [];\n        for (const username of CONFIG.MONITORED_USERS) {\n            const status = userStatuses.get(username);\n            if (status && status.isOnline) {\n                const gameTitle = status.gameName || status.currentGame || 'Unknown game';\n                onlineEntries.push(safeField(username, gameTitle, true));\n            }\n        }\n\n        if (onlineEntries.length === 0) {\n            await message.reply('No monitored users are online right now.');\n            break;\n        }\n\n        // Chunk into 25 fields per embed\n        const chunks = [];\n        for (let i = 0; i < onlineEntries.length; i += 25) {\n            chunks.push(onlineEntries.slice(i, i + 25));\n        }\n\n        for (let index = 0; index < chunks.length; index++) {\n            try {\n                const embed = new EmbedBuilder()\n                    .setColor('#5865F2')\n                    .setTitle('🎮 Online Users and Games')\n                    .setDescription('Users currently in games:')\n                    .addFields(chunks[index])\n                    .setTimestamp();\n                if (index === 0) {\n                    await message.reply({ embeds: [embed] });\n                } else {\n                    await message.channel.send({ embeds: [embed] });\n                }\n            } catch (sendErr) {\n                console.error('Error sending games embed chunk:', sendErr);\n            }\n        }\n        console.log('Games command executed successfully');\n    } catch (error) {\n        console.error('Error in games command:', error);\n        await message.reply('❌ Error showing games. Try again later.');\n    }\n    break;\n                \n            case 'start':\n                if (!isMonitoring) {\n                    isMonitoring = true;\n                    checkUserStatuses();\n                    await message.reply('✅ Monitoring started!');\n                } else {\n                    await message.reply('⚠️ Monitoring is already active!');\n                }\n                break;\n                \n            case 'stop':\n                if (isMonitoring) {\n                    isMonitoring = false;\n                    await message.reply('⏹️ Monitoring stopped!');\n                } else {\n                    await message.reply('⚠️ Monitoring is already stopped!');\n                }\n                break;\n                \n            case 'help':\n                const helpEmbed = new EmbedBuilder()\n                    .setColor('#0099ff')\n                    .setTitle('🤖 Bot Commands')\n                    .addFields(\n                        { name: '!help', value: 'Show this help message', inline: false },\n                        { name: '!status', value: 'Show current monitor status', inline: false },\n                        { name: '!users', value: 'Show current user statuses', inline: false },\n                        { name: '!games', value: 'Show online users and their games', inline: false },\n                        { name: '!start', value: 'Start monitoring', inline: false },\n                        { name: '!stop', value: 'Stop monitoring', inline: false }\n                    )\n                    .setTimestamp();\n                \n                await message.reply({ embeds: [helpEmbed] });\n                console.log('Help command executed successfully'); // Debug log\n                break;\n                \n            default:\n                console.log(`Unknown command: ${command}`); // Debug log\n                break;\n        }\n    } catch (error) {\n        console.error(`Error executing command ${command}:`, error);\n        await message.reply('❌ An error occurred while executing the command.');\n    }\n});\n\n// Error handling\nclient.on('error', (error) => {\n    console.error('Discord client error:', error);\n});\n\nprocess.on('unhandledRejection', (error) => {\n    console.error('Unhandled promise rejection:', error);\n});\n\n// Login to Discord\nif (!CONFIG.DISCORD_TOKEN) {\n    console.error('❌ DISCORD_TOKEN is required in .env file!');\n    process.exit(1);\n}\n\nif (!CONFIG.DISCORD_CHANNEL_ID) {\n    console.error('❌ DISCORD_CHANNEL_ID is required in .env file!');\n    process.exit(1);\n}\n\nclient.login(CONFIG.DISCORD_TOKEN);\n```
+                        { name: 'Notify On Offline', value: CONFIG.NOTIFY_ON_OFFLINE ? '✅ Yes' : '❌ No', inline: true }
+                    )
+                    .setTimestamp();
+                
+                await message.reply({ embeds: [statusEmbed] });
+                console.log('Status command executed successfully'); // Debug log
+                break;
+                
+case 'users':
+    try {
+        const fields = [];
+        for (const username of CONFIG.MONITORED_USERS) {
+            const status = userStatuses.get(username);
+            const isOnline = !!(status && status.isOnline);
+            const statusText = isOnline ? '🟢 Online' : '🔴 Offline';
+            const gameTitle = status && (status.gameName || status.currentGame) ? (status.gameName || status.currentGame) : null;
+            const gameLabel = isOnline && gameTitle ? ` (Game: ${gameTitle})` : '';
+            fields.push(safeField(username, statusText + gameLabel, true));
+        }
+
+        if (fields.length === 0) {
+            await message.reply('No monitored users configured.');
+            break;
+        }
+
+        // Discord limit: 25 fields per embed
+        const chunks = [];
+        for (let i = 0; i < fields.length; i += 25) {
+            chunks.push(fields.slice(i, i + 25));
+        }
+
+        for (let index = 0; index < chunks.length; index++) {
+            try {
+                const embed = new EmbedBuilder()
+                    .setColor('#00ff00')
+                    .setTitle('👥 User Status')
+                    .setDescription('Current status of monitored users:')
+                    .addFields(chunks[index])
+                    .setTimestamp();
+                if (index === 0) {
+                    await message.reply({ embeds: [embed] });
+                } else {
+                    await message.channel.send({ embeds: [embed] });
+                }
+            } catch (sendErr) {
+                console.error('Error sending users embed chunk:', sendErr);
+            }
+        }
+        console.log('Users command executed successfully');
+    } catch (error) {
+        console.error('Error in users command:', error);
+        await message.reply('❌ Error showing user statuses. Try again later.');
+    }
+    break;
+
+case 'games':
+    try {
+        // Build list of online users with their games
+        const onlineEntries = [];
+        for (const username of CONFIG.MONITORED_USERS) {
+            const status = userStatuses.get(username);
+            if (status && status.isOnline) {
+                const gameTitle = status.gameName || status.currentGame || 'Unknown game';
+                onlineEntries.push(safeField(username, gameTitle, true));
+            }
+        }
+
+        if (onlineEntries.length === 0) {
+            await message.reply('No monitored users are online right now.');
+            break;
+        }
+
+        // Chunk into 25 fields per embed
+        const chunks = [];
+        for (let i = 0; i < onlineEntries.length; i += 25) {
+            chunks.push(onlineEntries.slice(i, i + 25));
+        }
+
+        for (let index = 0; index < chunks.length; index++) {
+            try {
+                const embed = new EmbedBuilder()
+                    .setColor('#5865F2')
+                    .setTitle('🎮 Online Users and Games')
+                    .setDescription('Users currently in games:')
+                    .addFields(chunks[index])
+                    .setTimestamp();
+                if (index === 0) {
+                    await message.reply({ embeds: [embed] });
+                } else {
+                    await message.channel.send({ embeds: [embed] });
+                }
+            } catch (sendErr) {
+                console.error('Error sending games embed chunk:', sendErr);
+            }
+        }
+        console.log('Games command executed successfully');
+    } catch (error) {
+        console.error('Error in games command:', error);
+        await message.reply('❌ Error showing games. Try again later.');
+    }
+    break;
+                
+            case 'start':
+                if (!isMonitoring) {
+                    isMonitoring = true;
+                    checkUserStatuses();
+                    await message.reply('✅ Monitoring started!');
+                } else {
+                    await message.reply('⚠️ Monitoring is already active!');
+                }
+                break;
+                
+            case 'stop':
+                if (isMonitoring) {
+                    isMonitoring = false;
+                    await message.reply('⏹️ Monitoring stopped!');
+                } else {
+                    await message.reply('⚠️ Monitoring is already stopped!');
+                }
+                break;
+                
+            case 'help':
+                const helpEmbed = new EmbedBuilder()
+                    .setColor('#0099ff')
+                    .setTitle('🤖 Bot Commands')
+                    .addFields(
+                        { name: '!help', value: 'Show this help message', inline: false },
+                        { name: '!status', value: 'Show current monitor status', inline: false },
+                        { name: '!users', value: 'Show current user statuses', inline: false },
+                        { name: '!start', value: 'Start monitoring', inline: false },
+                        { name: '!stop', value: 'Stop monitoring', inline: false }
+                    )
+                    .setTimestamp();
+                
+                await message.reply({ embeds: [helpEmbed] });
+                console.log('Help command executed successfully'); // Debug log
+                break;
+                
+            default:
+                console.log(`Unknown command: ${command}`); // Debug log
+                break;
+        }
+    } catch (error) {
+        console.error(`Error executing command ${command}:`, error);
+        await message.reply('❌ An error occurred while executing the command.');
+    }
+});
+
+// Error handling
+client.on('error', (error) => {
+    console.error('Discord client error:', error);
+});
+
+process.on('unhandledRejection', (error) => {
+    console.error('Unhandled promise rejection:', error);
+});
+
+// Login to Discord
+if (!CONFIG.DISCORD_TOKEN) {
+    console.error('❌ DISCORD_TOKEN is required in .env file!');
+    process.exit(1);
+}
+
+if (!CONFIG.DISCORD_CHANNEL_ID) {
+    console.error('❌ DISCORD_CHANNEL_ID is required in .env file!');
+    process.exit(1);
+}
+
+client.login(CONFIG.DISCORD_TOKEN);
