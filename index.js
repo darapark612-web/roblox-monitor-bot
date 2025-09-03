@@ -144,6 +144,7 @@ async function getUserStatus(username) {
             const gameName = await resolveGameNameFromPresence(presence);
             return {
                 isOnline: presenceType !== 0,
+                isInGame: presenceType === 2,
                 currentGame: presence.placeId ? String(presence.placeId) : null,
                 gameName: gameName,
                 universeId: typeof presence.universeId === 'number' ? presence.universeId : (presence.universeId ? Number(presence.universeId) : null),
@@ -318,10 +319,11 @@ async function checkUserStatuses() {
             const previousStatus = userStatuses.get(username);
 
             // Notify when the user joins ANY game (first detection or game change)
+            // Join ping: when user becomes in-game (presenceType=2) for the first time or switches games
             const startedNewGame = (
-                currentStatus.isOnline &&
+                currentStatus.isInGame &&
                 !!currentStatus.currentGame &&
-                (!previousStatus || previousStatus.currentGame !== currentStatus.currentGame)
+                (!previousStatus || !previousStatus.isInGame || previousStatus.currentGame !== currentStatus.currentGame)
             );
             const justWentOffline = !currentStatus.isOnline && previousStatus && previousStatus.isOnline;
 
@@ -333,8 +335,8 @@ async function checkUserStatuses() {
 
             // Notify (no ping) when they leave a game (became offline or left to no game)
             const leftGame = (
-                previousStatus && previousStatus.currentGame && (
-                    (!currentStatus.isOnline) || (currentStatus.isOnline && !currentStatus.currentGame)
+                previousStatus && previousStatus.isInGame && (
+                    !currentStatus.isInGame || !currentStatus.currentGame
                 )
             );
             if (leftGame) {
