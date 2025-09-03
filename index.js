@@ -40,8 +40,8 @@ const CONFIG = {
 
     // Optional: Single-game focus
     TARGET_UNIVERSE_ID: process.env.TARGET_UNIVERSE_ID ? Number(process.env.TARGET_UNIVERSE_ID) : null,
-    TARGET_PLACE_ID: process.env.TARGET_PLACE_ID ? Number(process.env.TARGET_PLACE_ID) : null,
-    TARGET_GAME_NAME: process.env.TARGET_GAME_NAME || null
+    TARGET_PLACE_ID: process.env.TARGET_PLACE_ID ? Number(process.env.TARGET_PLACE_ID) : 5375160701,
+    TARGET_GAME_NAME: process.env.TARGET_GAME_NAME || '🍍Work at Kecai Restaurant!'
 };
 
 // Create Discord client
@@ -271,12 +271,16 @@ async function checkUserStatuses() {
             );
 
             if (CONFIG.TARGET_UNIVERSE_ID || CONFIG.TARGET_PLACE_ID) {
-                const isInTarget = (
+                const isInTargetNow = (
                     (CONFIG.TARGET_PLACE_ID && Number(currentStatus.currentGame) === Number(CONFIG.TARGET_PLACE_ID)) ||
-                    (CONFIG.TARGET_UNIVERSE_ID && previousStatus && previousStatus.universeId !== CONFIG.TARGET_UNIVERSE_ID) // fallback requires universeId in status (not stored); handled via name resolver anyway
+                    (CONFIG.TARGET_UNIVERSE_ID && currentStatus.universeId && Number(currentStatus.universeId) === Number(CONFIG.TARGET_UNIVERSE_ID))
                 );
-                // If target specified, only notify when entering the target
-                startedNewGame = startedNewGame && isInTarget;
+                const wasInTargetBefore = previousStatus && (
+                    (CONFIG.TARGET_PLACE_ID && Number(previousStatus.currentGame) === Number(CONFIG.TARGET_PLACE_ID)) ||
+                    (CONFIG.TARGET_UNIVERSE_ID && previousStatus.universeId && Number(previousStatus.universeId) === Number(CONFIG.TARGET_UNIVERSE_ID))
+                );
+                // Only notify when entering target from not-in-target
+                startedNewGame = isInTargetNow && !wasInTargetBefore;
             }
             const justWentOffline = !currentStatus.isOnline && previousStatus && previousStatus.isOnline;
 
