@@ -31,7 +31,12 @@ const CONFIG = {
     PING_EVERYONE: true,
     
     // NEW: Check interval for user status
-    CHECK_INTERVAL: process.env.CHECK_INTERVAL || 30 // seconds
+    CHECK_INTERVAL: process.env.CHECK_INTERVAL || 15, // seconds
+    
+    // NEW: Control offline notifications (default disabled)
+    NOTIFY_ON_OFFLINE: typeof process.env.NOTIFY_ON_OFFLINE === 'string' 
+        ? ['1','true','yes','y'].includes(process.env.NOTIFY_ON_OFFLINE.toLowerCase()) 
+        : false
 };
 
 // Create Discord client
@@ -234,50 +239,50 @@ async function checkUserStatuses() {
     try {
         console.log('Checking user statuses...');
         
-        // Check monitored users
+        // Check monitored users (notify only on transitions)
         for (const username of CONFIG.MONITORED_USERS) {
             const currentStatus = await getUserStatus(username);
             const previousStatus = userStatuses.get(username);
-            
-            // User came online
-            if (currentStatus.isOnline && (!previousStatus || !previousStatus.isOnline)) {
+
+            const justCameOnline = currentStatus.isOnline && (!previousStatus || !previousStatus.isOnline);
+            const justWentOffline = !currentStatus.isOnline && previousStatus && previousStatus.isOnline;
+
+            if (justCameOnline) {
                 console.log(`🔔 ${username} came online!`);
-                
-                const embed = createNotificationEmbed(username, 'user_online', null, null, currentStatus.gameName || currentStatus.currentGame);
-                await sendDiscordNotification(embed, true);
+                // Optionally include group/rank in the first online ping
+                let groupRank = null;
+                let roleName = null;
+                try {
+                    if (CONFIG.NOTIFY_GROUP_MEMBERS || CONFIG.NOTIFY_GROUP_RANKS) {
+                        const groupInfo = await getUserGroupInfo(username, CONFIG.GROUP_ID);
+                        if (groupInfo.isInGroup) {
+                            groupRank = groupInfo.rank;
+                            roleName = groupInfo.roleName;
+                        }
+                    }
+                } catch {}
+
+                // High-rank special formatting if enabled
+                if (groupRank !== null && CONFIG.NOTIFY_GROUP_RANKS && CONFIG.MONITORED_RANKS.includes(groupRank)) {
+                    const embed = createNotificationEmbed(username, 'high_rank_online', groupRank, roleName, currentStatus.gameName || currentStatus.currentGame);
+                    await sendDiscordNotification(embed, true);
+                } else if (groupRank !== null && CONFIG.NOTIFY_GROUP_MEMBERS) {
+                    const embed = createNotificationEmbed(username, 'group_member_online', groupRank, roleName, currentStatus.gameName || currentStatus.currentGame);
+                    await sendDiscordNotification(embed, true);
+                } else {
+                    const embed = createNotificationEmbed(username, 'user_online', null, null, currentStatus.gameName || currentStatus.currentGame);
+                    await sendDiscordNotification(embed, true);
+                }
             }
-            
-            // User went offline
-            if (!currentStatus.isOnline && previousStatus && previousStatus.isOnline) {
-                console.log(`🔔 ${username} went offline!`);
-                
+
+            if (justWentOffline && CONFIG.NOTIFY_ON_OFFLINE) {
+                console.log(`🔕 ${username} went offline (notification enabled).`);
                 const embed = createNotificationEmbed(username, 'user_offline');
                 await sendDiscordNotification(embed, false);
             }
-            
+
             // Update status
             userStatuses.set(username, currentStatus);
-        }
-        
-        // Check group members
-        for (const username of CONFIG.MONITORED_USERS) {
-            const groupInfo = await getUserGroupInfo(username, CONFIG.GROUP_ID);
-            if (groupInfo.isInGroup) {
-                const currentStatus = userStatuses.get(username);
-                
-                if (currentStatus && currentStatus.isOnline) {
-                    // Group member is online
-                    if (CONFIG.NOTIFY_GROUP_RANKS && CONFIG.MONITORED_RANKS.includes(groupInfo.rank)) {
-                        // High rank member
-                        const embed = createNotificationEmbed(username, 'high_rank_online', groupInfo.rank, groupInfo.roleName, currentStatus.gameName || currentStatus.currentGame);
-                        await sendDiscordNotification(embed, true);
-                    } else {
-                        // Regular group member
-                        const embed = createNotificationEmbed(username, 'group_member_online', groupInfo.rank, groupInfo.roleName, currentStatus.gameName || currentStatus.currentGame);
-                        await sendDiscordNotification(embed, true);
-                    }
-                }
-            }
         }
         
         // Update bot status
@@ -342,7 +347,8 @@ client.on('messageCreate', async (message) => {
                         { name: 'Group ID', value: CONFIG.GROUP_ID, inline: true },
                         { name: 'Check Interval', value: `${CONFIG.CHECK_INTERVAL}s`, inline: true },
                         { name: 'Show Group Ranks', value: CONFIG.SHOW_GROUP_RANKS ? '✅ Yes' : '❌ No', inline: true },
-                        { name: 'Ping Everyone', value: CONFIG.PING_EVERYONE ? '✅ Yes' : '❌ No', inline: true }
+                        { name: 'Ping Everyone', value: CONFIG.PING_EVERYONE ? '✅ Yes' : '❌ No', inline: true },
+                        { name: 'Notify On Offline', value: CONFIG.NOTIFY_ON_OFFLINE ? '✅ Yes' : '❌ No', inline: true }
                     )
                     .setTimestamp();
                 
