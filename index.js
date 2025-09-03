@@ -44,6 +44,11 @@ const CONFIG = {
     TARGET_GAME_NAME: process.env.TARGET_GAME_NAME || '🍍Work at Kecai Restaurant!'
 };
 
+// Force roproxy-only (no fallback to roblox.com) unless explicitly disabled
+const NO_ROBLOX_FALLBACK = typeof process.env.NO_ROBLOX_FALLBACK === 'string'
+    ? ['1','true','yes','y'].includes(process.env.NO_ROBLOX_FALLBACK.toLowerCase())
+    : true;
+
 // Create Discord client
 const client = new Client({
     intents: [
@@ -70,12 +75,16 @@ function safeField(name, value, inline = true) {
 }
 
 // Fallback-capable HTTP helpers and base domains
+function bases(primary, secondary) {
+    return NO_ROBLOX_FALLBACK ? [primary] : [primary, secondary];
+}
+
 const BASES = {
-    users: [process.env.USERS_BASE || 'https://users.roproxy.com', 'https://users.roblox.com'],
-    presence: [process.env.PRESENCE_BASE || 'https://presence.roproxy.com', 'https://presence.roblox.com'],
-    groups: [process.env.GROUPS_BASE || 'https://groups.roproxy.com', 'https://groups.roblox.com'],
-    games: [process.env.GAMES_BASE || 'https://games.roproxy.com', 'https://games.roblox.com'],
-    apis: [process.env.APIS_BASE || 'https://apis.roproxy.com', 'https://apis.roblox.com']
+    users: bases(process.env.USERS_BASE || 'https://users.roproxy.com', 'https://users.roblox.com'),
+    presence: bases(process.env.PRESENCE_BASE || 'https://presence.roproxy.com', 'https://presence.roblox.com'),
+    groups: bases(process.env.GROUPS_BASE || 'https://groups.roproxy.com', 'https://groups.roblox.com'),
+    games: bases(process.env.GAMES_BASE || 'https://games.roproxy.com', 'https://games.roblox.com'),
+    apis: bases(process.env.APIS_BASE || 'https://apis.roproxy.com', 'https://apis.roblox.com')
 };
 
 async function getWithFallback(bases, path, config = {}) {
